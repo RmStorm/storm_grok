@@ -1,68 +1,81 @@
-use std::net::ToSocketAddrs;
+use actix::Addr;
+use actix_web::dev::ServerHandle;
+use actix_web::web;
+use actix_web::App;
+use actix_web::HttpRequest;
+use actix_web::HttpResponse;
+use actix_web::HttpServer;
+use parking_lot::Mutex;
 
-use actix::{Actor, Addr};
-use actix_web::{error, middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
-use awc::Client;
-use clap::StructOpt;
-use futures_util::{sink::SinkExt as _, stream::StreamExt as _};
-use log::info;
-use openssl::ssl::SslConnector;
-use url::Url;
+use std::io::ErrorKind;
+use std::net::TcpListener;
+use tracing::info;
+use tracing_subscriber;
 
 mod client;
 
-async fn all(
+async fn index(
     req: HttpRequest,
-    payload: web::Payload,
-    sgc: web::Data<Addr<client::StormGrokClient>>,
-) -> Result<HttpResponse, Error> {
-    let yada = sgc.send(client::GetCycles { last: 0 }).await;
-    info!("{yada:?}");
-    Ok(HttpResponse::Ok().body("partyparty"))
+    body: web::Bytes,
+    srv: web::Data<Addr<client::StormGrokClient>>,
+) -> HttpResponse {
+    info!("\nREQ: {req:?}");
+    info!("body: {body:?}");
+    info!("srv: {srv:?}");
+    HttpResponse::Ok().body("partyparty")
 }
 
-#[derive(clap::Parser, Debug)]
-struct CliArguments {
-    forward_port: u16,
+fn listen_available_port() -> TcpListener {
+    for port in 4040..65535 {
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => return l,
+            Err(error) => match error.kind() {
+                ErrorKind::AddrInUse => {}
+                other_error => panic!(
+                    "Encountered errr while setting up tcp server: {:?}",
+                    other_error
+                ),
+            },
+        }
+    }
+    panic!("No ports available")
 }
 
 #[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+async fn main() -> Result<(), std::io::Error> {
+    tracing_subscriber::fmt::init();
+    let stop_handle = web::Data::new(StopHandle::default());
+    let client_address = client::start_client(stop_handle.clone()).await;
 
-    let args = CliArguments::parse();
-    let forward_socket_addr = ("localhost", args.forward_port)
-        .to_socket_addrs()?
-        .next()
-        .expect("given forwarding address was not valid");
-
-    let forward_url = format!("http://{forward_socket_addr}");
-    let forward_url = Url::parse(&forward_url).unwrap();
-
-    // All of this magic comes from: https://stackoverflow.com/questions/70118994/build-a-websocket-client-using-actix
-    // TODO: use ssl/wss?
-    let (_, framed) = Client::default()
-        .ws("ws://localhost:3000/ws/")
-        .connect()
-        .await
-        .unwrap();
-
-    // TODO, this server address gets used by all threads which means there is effectively just 
-    // one client used for forwarding requests. Probably not at all a problem?
-    let (sink, stream): (client::WsFramedSink, client::WsFramedStream) = framed.split();
-    let server_address = client::StormGrokClient::start(sink, stream, forward_url.clone());
-    info!("Started websocket to ws://localhost:3000/ws/",);
-    info!("starting StormGrok UI at http://localhost:4040");
-    info!("forwarding to {forward_url}");
-
-    HttpServer::new(move || {
+    let server_port = listen_available_port();
+    info!(
+        "starting storm grok interface at http://{:?}",
+        server_port.local_addr()?
+    );
+    let srv = HttpServer::new(move || {
         App::new()
-            .app_data(web::Data::new(server_address.clone()))
-            .wrap(middleware::Logger::default())
-            .route("/all/", web::get().to(all))
+            .app_data(web::Data::new(client_address.clone()))
+            .service(web::resource("/").to(index))
     })
-    .bind(("127.0.0.1", 4040))?
-    .workers(2)
-    .run()
-    .await
+    .listen(server_port)?
+    .run();
+    stop_handle.register(srv.handle());
+    srv.await
+}
+
+// This comes from: https://github.com/actix/examples/tree/master/shutdown-server
+#[derive(Debug, Default)]
+pub struct StopHandle {
+    pub inner: Mutex<Option<ServerHandle>>,
+}
+impl StopHandle {
+    /// Sets the server handle to stop.
+    pub(crate) fn register(&self, handle: ServerHandle) {
+        *self.inner.lock() = Some(handle);
+    }
+
+    /// Sends stop signal through contained server handle.
+    pub(crate) fn stop(&self, graceful: bool) {
+        let _ = self.inner.lock().as_ref().unwrap().stop(graceful);
+    }
 }
