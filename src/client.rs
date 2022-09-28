@@ -1,17 +1,12 @@
-use actix::prelude::*;
-use actix::{Actor, Addr, StreamHandler};
-use actix_web::rt::net::TcpStream;
-use actix_web::web;
-use futures_util::StreamExt;
+use actix::{prelude::*, Actor, Addr, StreamHandler};
+use actix_web::{rt::net::TcpStream, web};
 use quinn::{
     ClientConfig, Connection, ConnectionError, Endpoint, NewConnection, RecvStream, SendStream,
 };
 use tracing::log::{error, info};
 
 use anyhow::Result;
-use std::io::ErrorKind;
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::{env, io::ErrorKind, net::SocketAddr, sync::Arc};
 use uuid::Uuid;
 
 use crate::StopHandle;
@@ -70,34 +65,36 @@ fn setup_quic_available_port() -> Endpoint {
 pub struct StormGrokClient {
     pub id: Uuid,
     pub connection: Connection,
+    pub port: u16,
     pub stop_handle: web::Data<StopHandle>,
 }
 
-pub async fn start_client(stop_handle: web::Data<StopHandle>) -> Addr<StormGrokClient> {
+pub async fn start_client(stop_handle: web::Data<StopHandle>, port: u16) -> Addr<StormGrokClient> {
     let mut endpoint = setup_quic_available_port();
-    info!(
-        "starting quic client at {:?}",
-        endpoint.local_addr().unwrap()
-    );
     endpoint.set_default_client_config(configure_client());
 
     // Connect to the server passing in the server name which is supposed to be in the server certificate.
-    let mut new_connection = endpoint
+    let new_connection = endpoint
         .connect("127.0.0.1:5000".parse::<SocketAddr>().unwrap(), "localhost")
         .unwrap()
         .await
         .unwrap();
 
-    if let Some(Ok(recv)) = new_connection.uni_streams.next().await {
-        let uuid_bytes = recv.read_to_end(16).await.unwrap();
-        let uuid: &[u8; 16] = &uuid_bytes.try_into().unwrap();
-        let uuid = Uuid::from_bytes(*uuid);
-        info!("got uuid {:?}", uuid);
-        info!("curl http://{:?}.localhost:3000", uuid);
-        StormGrokClient::start(uuid, new_connection, stop_handle)
-    } else {
-        panic!("Could not start client")
-    }
+    let (mut send, recv) = new_connection.connection.open_bi().await.unwrap();
+    let token: String = env::var("TOKEN").unwrap();
+    send.write_all(token.as_bytes()).await.unwrap();
+    send.finish().await.unwrap();
+
+    let uuid_bytes = recv
+        .read_to_end(16)
+        .await
+        .expect("The server did not give us a UUID!");
+    let uuid: &[u8; 16] = &uuid_bytes.try_into().unwrap();
+    let uuid = Uuid::from_bytes(*uuid);
+    info!("Exposing localhost:{:?} on the internet!", port);
+    info!("got uuid {:?} assigned from server.", uuid);
+    info!("curl http://{:?}.localhost:3000", uuid);
+    StormGrokClient::start(uuid, port, new_connection, stop_handle)
 }
 
 impl Actor for StormGrokClient {
@@ -113,14 +110,21 @@ impl Actor for StormGrokClient {
 }
 
 impl StormGrokClient {
-    fn start(id: Uuid, new_conn: NewConnection, stop_handle: web::Data<StopHandle>) -> Addr<Self> {
+    fn start(
+        id: Uuid,
+        port: u16,
+        new_conn: NewConnection,
+        stop_handle: web::Data<StopHandle>,
+    ) -> Addr<Self> {
         StormGrokClient::create(|ctx| {
             ctx.add_stream(new_conn.bi_streams);
             ctx.add_stream(new_conn.uni_streams);
+            let connection = new_conn.connection;
             StormGrokClient {
-                id: id,
-                connection: new_conn.connection,
-                stop_handle: stop_handle,
+                id,
+                port,
+                connection,
+                stop_handle,
             }
         })
     }
@@ -128,9 +132,9 @@ impl StormGrokClient {
 
 async fn handle_uni_stream(
     stream: Result<RecvStream, ConnectionError>,
-) -> Result<(), std::io::Error> {
+) -> Result<()> {
     let recv = stream?;
-    let buffed_data = recv.read_to_end(100).await.unwrap();
+    let buffed_data = recv.read_to_end(100).await?;
     if buffed_data != b"ping".to_vec() {
         info!(
             "received from server: {:?}",
@@ -155,19 +159,22 @@ impl StreamHandler<Result<RecvStream, ConnectionError>> for StormGrokClient {
     }
 }
 
-async fn handle_client_conn(client_connection: (SendStream, RecvStream)) {
-    info!("Forwarding connection to 127.0.0.1:8000");
+async fn handle_client_conn(client_connection: (SendStream, RecvStream), port: u16) {
     let (mut client_send, mut client_recv) = client_connection;
-    let mut server_stream = TcpStream::connect("127.0.0.1:8000").await.unwrap();
-    let (mut server_recv, mut server_send) = server_stream.split();
-    tokio::select! {
-        _ = tokio::io::copy(&mut server_recv, &mut client_send) => {
-            info!("reached EOF on client")
-        }
-        _ = tokio::io::copy(&mut client_recv, &mut server_send) => {
-            info!("reached EOF on server")
-        }
-    };
+    match TcpStream::connect(("127.0.0.1", port)).await {
+        Ok(mut server_stream) => {
+            info!("Succesfully connected client");
+            let (mut server_recv, mut server_send) = server_stream.split();
+            tokio::select! {
+                _ = tokio::io::copy(&mut server_recv, &mut client_send) => {}
+                _ = tokio::io::copy(&mut client_recv, &mut server_send) => {}
+            };
+        },
+        Err(e) => {
+            error!("Encountered {:?} while connecting to {:?}", e, port);
+            client_send.finish().await.unwrap();
+        },
+    }
 }
 
 impl StreamHandler<Result<(SendStream, RecvStream), ConnectionError>> for StormGrokClient {
@@ -178,7 +185,7 @@ impl StreamHandler<Result<(SendStream, RecvStream), ConnectionError>> for StormG
     ) {
         match item {
             Ok(client_connection) => {
-                handle_client_conn(client_connection)
+                handle_client_conn(client_connection, self.port)
                     .into_actor(self)
                     .spawn(ctx);
             }

@@ -1,18 +1,32 @@
 use actix::Addr;
-use actix_web::dev::ServerHandle;
-use actix_web::web;
-use actix_web::App;
-use actix_web::HttpRequest;
-use actix_web::HttpResponse;
-use actix_web::HttpServer;
+use actix_web::{dev::ServerHandle, web, App, HttpRequest, HttpResponse, HttpServer};
 use parking_lot::Mutex;
 
-use std::io::ErrorKind;
-use std::net::TcpListener;
+use std::{io::ErrorKind, net::TcpListener};
 use tracing::info;
 use tracing_subscriber;
 
 mod client;
+
+use clap::Parser;
+// use clap::ValueEnum;
+
+#[derive(Parser)]
+#[clap(author, version, about, long_about = None)]
+struct Cli {
+    /// What mode to run the program in
+    // #[clap(arg_enum, value_parser)]
+    // mode: Mode,
+    /// Port to forward to
+    #[clap(value_parser = clap::value_parser!(u16).range(1..65536))]
+    port: u16,
+}
+
+// #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+// enum Mode {
+//     Http,
+//     Tcp,
+// }
 
 async fn index(
     req: HttpRequest,
@@ -22,7 +36,7 @@ async fn index(
     info!("\nREQ: {req:?}");
     info!("body: {body:?}");
     info!("srv: {srv:?}");
-    HttpResponse::Ok().body("partyparty")
+    HttpResponse::Ok().body("request replaying is cool!\n")
 }
 
 fn listen_available_port() -> TcpListener {
@@ -43,9 +57,10 @@ fn listen_available_port() -> TcpListener {
 
 #[actix_web::main]
 async fn main() -> Result<(), std::io::Error> {
+    let cli = Cli::parse();
     tracing_subscriber::fmt::init();
     let stop_handle = web::Data::new(StopHandle::default());
-    let client_address = client::start_client(stop_handle.clone()).await;
+    let client_address = client::start_client(stop_handle.clone(), cli.port).await;
 
     let server_port = listen_available_port();
     info!(
