@@ -12,7 +12,7 @@ actix-web-actors = "4.1.0"
 tokio = { version = "1.21.1", features = ["full"] }
 parking_lot = "0.12.1"
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 quinn = "0.8.5"
 rustls = { version = "*", features = ["dangerous_configuration", "quic"] }
 futures-util = "0.3.24"

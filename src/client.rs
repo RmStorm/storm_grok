@@ -3,51 +3,21 @@ use actix_web::{rt::net::TcpStream, web};
 use quinn::{
     ClientConfig, Connection, ConnectionError, Endpoint, NewConnection, RecvStream, SendStream,
 };
-use tracing::log::{error, info};
+use tracing::log::{debug, error, info};
 
 use anyhow::Result;
-use std::{env, io::ErrorKind, net::SocketAddr, sync::Arc};
+use std::{env, io::ErrorKind, net::SocketAddr};
 use uuid::Uuid;
 
-use crate::StopHandle;
+use crate::{dev_stuff, Cli, StopHandle};
 
-struct SkipServerVerification;
-
-impl SkipServerVerification {
-    fn new() -> Arc<Self> {
-        Arc::new(Self)
-    }
-}
-
-impl rustls::client::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::Certificate,
-        _intermediates: &[rustls::Certificate],
-        _server_name: &rustls::ServerName,
-        _scts: &mut dyn Iterator<Item = &[u8]>,
-        _ocsp_response: &[u8],
-        _now: std::time::SystemTime,
-    ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::ServerCertVerified::assertion())
-    }
-}
-
-fn configure_client() -> ClientConfig {
-    let crypto = rustls::ClientConfig::builder()
-        .with_safe_defaults()
-        .with_custom_certificate_verifier(SkipServerVerification::new())
-        .with_no_client_auth();
-
-    ClientConfig::new(Arc::new(crypto))
-}
-
-fn setup_quic_available_port() -> Endpoint {
+fn setup_quic_on_available_port(host: &str) -> Endpoint {
     for port in 5001..65535 {
-        let socket: SocketAddr = format!("127.0.0.1:{port:?}")
+        let socket: SocketAddr = format!("{host}:{port:?}")
             .as_str()
             .parse::<SocketAddr>()
             .unwrap();
+        debug!("Found a free socket for quic client '{:?}'", &socket);
         match Endpoint::client(socket) {
             Ok(endpoint) => return endpoint,
             Err(error) => match error.kind() {
@@ -69,16 +39,22 @@ pub struct StormGrokClient {
     pub stop_handle: web::Data<StopHandle>,
 }
 
-pub async fn start_client(stop_handle: web::Data<StopHandle>, port: u16) -> Addr<StormGrokClient> {
-    let mut endpoint = setup_quic_available_port();
-    endpoint.set_default_client_config(configure_client());
-
-    // Connect to the server passing in the server name which is supposed to be in the server certificate.
-    let new_connection = endpoint
-        .connect("127.0.0.1:5000".parse::<SocketAddr>().unwrap(), "localhost")
-        .unwrap()
-        .await
-        .unwrap();
+pub async fn start_client(stop_handle: web::Data<StopHandle>, cli: Cli) -> Addr<StormGrokClient> {
+    let new_connection = if cli.dev {
+        let mut endpoint = setup_quic_on_available_port("127.0.0.1");
+        endpoint.set_default_client_config(dev_stuff::configure_insecure_client());
+        info!("quic endpoint configured for insecure and local connections only");
+        endpoint.connect("127.0.0.1:5000".parse::<SocketAddr>().unwrap(), "localhost")
+    } else {
+        let mut endpoint = setup_quic_on_available_port("0.0.0.0");
+        endpoint.set_default_client_config(ClientConfig::with_native_roots());
+        info!("quic endpoint configured for secure connections");
+        endpoint.connect(
+            "157.90.124.255:5000".parse::<SocketAddr>().unwrap(),
+            "stormgrok.nl",
+        )
+    };
+    let new_connection = new_connection.unwrap().await.unwrap();
 
     let (mut send, recv) = new_connection.connection.open_bi().await.unwrap();
     let token: String = env::var("TOKEN").unwrap();
@@ -91,10 +67,14 @@ pub async fn start_client(stop_handle: web::Data<StopHandle>, port: u16) -> Addr
         .expect("The server did not give us a UUID!");
     let uuid: &[u8; 16] = &uuid_bytes.try_into().unwrap();
     let uuid = Uuid::from_bytes(*uuid);
-    info!("Exposing localhost:{:?} on the internet!", port);
+    info!("Exposing localhost:{:?} on the internet!", cli.port);
     info!("got uuid {:?} assigned from server.", uuid);
-    info!("curl http://{:?}.localhost:3000", uuid);
-    StormGrokClient::start(uuid, port, new_connection, stop_handle)
+    if cli.dev {
+        info!("curl http://{:?}.localhost:3000", uuid);
+    } else {
+        info!("curl https://{:?}.stormgrok.nl:3000", uuid);
+    }
+    StormGrokClient::start(uuid, cli.port, new_connection, stop_handle)
 }
 
 impl Actor for StormGrokClient {
@@ -130,9 +110,7 @@ impl StormGrokClient {
     }
 }
 
-async fn handle_uni_stream(
-    stream: Result<RecvStream, ConnectionError>,
-) -> Result<()> {
+async fn handle_uni_stream(stream: Result<RecvStream, ConnectionError>) -> Result<()> {
     let recv = stream?;
     let buffed_data = recv.read_to_end(100).await?;
     if buffed_data != b"ping".to_vec() {
@@ -169,11 +147,11 @@ async fn handle_client_conn(client_connection: (SendStream, RecvStream), port: u
                 _ = tokio::io::copy(&mut server_recv, &mut client_send) => {}
                 _ = tokio::io::copy(&mut client_recv, &mut server_send) => {}
             };
-        },
+        }
         Err(e) => {
             error!("Encountered {:?} while connecting to {:?}", e, port);
             client_send.finish().await.unwrap();
-        },
+        }
     }
 }
 

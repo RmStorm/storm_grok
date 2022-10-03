@@ -4,22 +4,26 @@ use parking_lot::Mutex;
 
 use std::{io::ErrorKind, net::TcpListener};
 use tracing::info;
-use tracing_subscriber;
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::{fmt, EnvFilter};
 
 mod client;
+mod dev_stuff;
 
 use clap::Parser;
 // use clap::ValueEnum;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
-struct Cli {
+pub struct Cli {
     /// What mode to run the program in
     // #[clap(arg_enum, value_parser)]
     // mode: Mode,
     /// Port to forward to
     #[clap(value_parser = clap::value_parser!(u16).range(1..65536))]
     port: u16,
+    #[clap(long, short, action)]
+    dev: bool,
 }
 
 // #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -58,9 +62,16 @@ fn listen_available_port() -> TcpListener {
 #[actix_web::main]
 async fn main() -> Result<(), std::io::Error> {
     let cli = Cli::parse();
-    tracing_subscriber::fmt::init();
+    fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .event_format(fmt::format().pretty())
+        .init();
     let stop_handle = web::Data::new(StopHandle::default());
-    let client_address = client::start_client(stop_handle.clone(), cli.port).await;
+    let client_address = client::start_client(stop_handle.clone(), cli).await;
 
     let server_port = listen_available_port();
     info!(
