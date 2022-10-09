@@ -4,10 +4,10 @@ use quinn::{
     ClientConfig, Connection, ConnectionError, Endpoint, NewConnection, RecvStream, SendStream,
 };
 use tracing::log::{debug, error, info};
-
-use anyhow::Result;
-use std::{env, io::ErrorKind, net::SocketAddr};
 use uuid::Uuid;
+
+use anyhow::{Context as AH_Context, Result};
+use std::{env, io::ErrorKind, net::SocketAddr};
 
 use crate::{dev_stuff, Cli, StopHandle};
 
@@ -33,7 +33,6 @@ fn setup_quic_on_available_port(host: &str) -> Endpoint {
 }
 
 pub struct StormGrokClient {
-    pub id: Uuid,
     pub connection: Connection,
     pub port: u16,
     pub stop_handle: web::Data<StopHandle>,
@@ -57,15 +56,18 @@ pub async fn start_client(stop_handle: web::Data<StopHandle>, cli: Cli) -> Addr<
     let new_connection = new_connection.unwrap().await.unwrap();
 
     let (mut send, recv) = new_connection.connection.open_bi().await.unwrap();
-    let token: String = env::var("TOKEN").unwrap();
+    let token: String = env::var("SGROK_TOKEN")
+        .context("You need to supply a jwt in env var SGROK_TOKEN")
+        .unwrap();
+    send.write_all(&<[u8; 1]>::from(cli.mode)).await.unwrap();
     send.write_all(token.as_bytes()).await.unwrap();
     send.finish().await.unwrap();
 
-    let uuid_bytes = recv
+    let response_bytes = recv
         .read_to_end(16)
         .await
         .expect("The server did not give us a UUID!");
-    let uuid: &[u8; 16] = &uuid_bytes.try_into().unwrap();
+    let uuid: &[u8; 16] = &response_bytes.try_into().unwrap();
     let uuid = Uuid::from_bytes(*uuid);
     info!("Exposing localhost:{:?} on the internet!", cli.port);
     info!("got uuid {:?} assigned from server.", uuid);
@@ -74,7 +76,7 @@ pub async fn start_client(stop_handle: web::Data<StopHandle>, cli: Cli) -> Addr<
     } else {
         info!("curl https://{:?}.stormgrok.nl:3000", uuid);
     }
-    StormGrokClient::start(uuid, cli.port, new_connection, stop_handle)
+    StormGrokClient::start(cli.port, new_connection, stop_handle)
 }
 
 impl Actor for StormGrokClient {
@@ -90,21 +92,14 @@ impl Actor for StormGrokClient {
 }
 
 impl StormGrokClient {
-    fn start(
-        id: Uuid,
-        port: u16,
-        new_conn: NewConnection,
-        stop_handle: web::Data<StopHandle>,
-    ) -> Addr<Self> {
+    fn start(port: u16, new_conn: NewConnection, stop_handle: web::Data<StopHandle>) -> Addr<Self> {
         StormGrokClient::create(|ctx| {
             ctx.add_stream(new_conn.bi_streams);
             ctx.add_stream(new_conn.uni_streams);
-            let connection = new_conn.connection;
             StormGrokClient {
-                id,
-                port,
-                connection,
-                stop_handle,
+                port: port,
+                connection: new_conn.connection,
+                stop_handle: stop_handle,
             }
         })
     }

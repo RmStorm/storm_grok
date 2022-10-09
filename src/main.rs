@@ -11,14 +11,14 @@ mod client;
 mod dev_stuff;
 
 use clap::Parser;
-// use clap::ValueEnum;
+use clap::ValueEnum;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
 pub struct Cli {
     /// What mode to run the program in
-    // #[clap(arg_enum, value_parser)]
-    // mode: Mode,
+    #[clap(arg_enum, value_parser)]
+    mode: Mode,
     /// Port to forward to
     #[clap(value_parser = clap::value_parser!(u16).range(1..65536))]
     port: u16,
@@ -26,11 +26,20 @@ pub struct Cli {
     dev: bool,
 }
 
-// #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-// enum Mode {
-//     Http,
-//     Tcp,
-// }
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum Mode {
+    Http,
+    Tcp,
+}
+
+impl From<Mode> for [u8; 1] {
+    fn from(mode: Mode) -> [u8; 1] {
+        match mode {
+            Mode::Tcp => [116],  // 116 = t in ascii
+            Mode::Http => [104], // 104 = h in ascii
+        }
+    }
+}
 
 async fn index(
     req: HttpRequest,
