@@ -9,7 +9,7 @@ use uuid::Uuid;
 use anyhow::{Context as AH_Context, Result};
 use std::{env, io::ErrorKind, net::SocketAddr};
 
-use crate::{dev_stuff, Cli, StopHandle};
+use crate::{dev_stuff, Cli, Mode, StopHandle};
 
 fn setup_quic_on_available_port(host: &str) -> Endpoint {
     for port in 5001..65535 {
@@ -67,14 +67,23 @@ pub async fn start_client(stop_handle: web::Data<StopHandle>, cli: Cli) -> Addr<
         .read_to_end(16)
         .await
         .expect("The server did not give us a UUID!");
-    let uuid: &[u8; 16] = &response_bytes.try_into().unwrap();
-    let uuid = Uuid::from_bytes(*uuid);
+
     info!("Exposing localhost:{:?} on the internet!", cli.port);
-    info!("got uuid {:?} assigned from server.", uuid);
-    if cli.dev {
-        info!("curl http://{:?}.localhost:3000", uuid);
-    } else {
-        info!("curl https://{:?}.stormgrok.nl:3000", uuid);
+    match cli.mode {
+        Mode::Tcp => {
+            let port = u16::from_be_bytes(response_bytes.try_into().unwrap());
+            match cli.dev {
+                true => info!("nc localhost {:?}", port),
+                false => info!("nc stormgrok.nl {:?}", port),
+            }
+        }
+        Mode::Http => {
+            let uuid = Uuid::from_bytes(response_bytes.try_into().unwrap());
+            match cli.dev {
+                true => info!("curl http://{:?}.localhost:3000", uuid),
+                false => info!("curl https://{:?}.stormgrok.nl:3000", uuid),
+            }
+        }
     }
     StormGrokClient::start(cli.port, new_connection, stop_handle)
 }
