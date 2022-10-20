@@ -1,13 +1,15 @@
 use actix::Addr;
 use actix_web::{dev::ServerHandle, web, App, HttpRequest, HttpResponse, HttpServer};
 use parking_lot::Mutex;
+use parking_lot::RwLock;
 
-use std::{io::ErrorKind, net::TcpListener};
+use std::{io::ErrorKind, net::TcpListener, sync::Arc};
 use tracing::info;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::{fmt, EnvFilter};
 
 mod client;
+mod copy_writer;
 mod dev_stuff;
 
 use clap::Parser;
@@ -42,13 +44,13 @@ impl From<Mode> for [u8; 1] {
 }
 
 async fn index(
-    req: HttpRequest,
-    body: web::Bytes,
-    srv: web::Data<Addr<client::StormGrokClient>>,
+    _req: HttpRequest,
+    _body: web::Bytes,
+    _srv: web::Data<Addr<client::StormGrokClient>>,
 ) -> HttpResponse {
-    info!("\nREQ: {req:?}");
-    info!("body: {body:?}");
-    info!("srv: {srv:?}");
+    // info!("\nREQ: {req:?}");
+    // info!("body: {body:?}");
+    // info!("srv: {srv:?}");
     HttpResponse::Ok().body("request replaying is cool!\n")
 }
 
@@ -79,8 +81,12 @@ async fn main() -> Result<(), std::io::Error> {
         )
         .event_format(fmt::format().pretty())
         .init();
+    let traffic_log: Arc<RwLock<copy_writer::TrafficLog>> =
+        Arc::new(RwLock::new(copy_writer::TrafficLog {
+            logged_conns: Vec::new(),
+        }));
     let stop_handle = web::Data::new(StopHandle::default());
-    let client_address = client::start_client(stop_handle.clone(), cli).await;
+    let client_address = client::start_client(stop_handle.clone(), cli, traffic_log.clone()).await;
 
     let server_port = listen_available_port();
     info!(
@@ -90,6 +96,7 @@ async fn main() -> Result<(), std::io::Error> {
     let srv = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(client_address.clone()))
+            .app_data(web::Data::new(traffic_log.clone()))
             .service(web::resource("/").to(index))
     })
     .listen(server_port)?

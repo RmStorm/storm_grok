@@ -1,15 +1,22 @@
+use crate::copy_writer::TrafficLog;
 use actix::{prelude::*, Actor, Addr, StreamHandler};
 use actix_web::{rt::net::TcpStream, web};
+use parking_lot::RwLock;
 use quinn::{
     ClientConfig, Connection, ConnectionError, Endpoint, NewConnection, RecvStream, SendStream,
 };
+use std::sync::Arc;
+
 use tracing::log::{debug, error, info};
 use uuid::Uuid;
 
 use anyhow::{Context as AH_Context, Result};
 use std::{env, io::ErrorKind, net::SocketAddr};
 
-use crate::{dev_stuff, Cli, Mode, StopHandle};
+use crate::{
+    copy_writer::{create_logged_writers, print_full_traffic_log},
+    dev_stuff, Cli, Mode, StopHandle,
+};
 
 fn setup_quic_on_available_port(host: &str) -> Endpoint {
     for port in 5001..65535 {
@@ -36,9 +43,14 @@ pub struct StormGrokClient {
     pub connection: Connection,
     pub port: u16,
     pub stop_handle: web::Data<StopHandle>,
+    pub traffic_log: Arc<RwLock<TrafficLog>>,
 }
 
-pub async fn start_client(stop_handle: web::Data<StopHandle>, cli: Cli) -> Addr<StormGrokClient> {
+pub async fn start_client(
+    stop_handle: web::Data<StopHandle>,
+    cli: Cli,
+    traffic_log: Arc<RwLock<TrafficLog>>,
+) -> Addr<StormGrokClient> {
     let new_connection = if cli.dev {
         let mut endpoint = setup_quic_on_available_port("127.0.0.1");
         endpoint.set_default_client_config(dev_stuff::configure_insecure_client());
@@ -85,7 +97,7 @@ pub async fn start_client(stop_handle: web::Data<StopHandle>, cli: Cli) -> Addr<
             }
         }
     }
-    StormGrokClient::start(cli.port, new_connection, stop_handle)
+    StormGrokClient::start(cli.port, new_connection, stop_handle, traffic_log)
 }
 
 impl Actor for StormGrokClient {
@@ -101,7 +113,12 @@ impl Actor for StormGrokClient {
 }
 
 impl StormGrokClient {
-    fn start(port: u16, new_conn: NewConnection, stop_handle: web::Data<StopHandle>) -> Addr<Self> {
+    fn start(
+        port: u16,
+        new_conn: NewConnection,
+        stop_handle: web::Data<StopHandle>,
+        traffic_log: Arc<RwLock<TrafficLog>>,
+    ) -> Addr<Self> {
         StormGrokClient::create(|ctx| {
             ctx.add_stream(new_conn.bi_streams);
             ctx.add_stream(new_conn.uni_streams);
@@ -109,6 +126,7 @@ impl StormGrokClient {
                 port: port,
                 connection: new_conn.connection,
                 stop_handle: stop_handle,
+                traffic_log: traffic_log,
             }
         })
     }
@@ -141,16 +159,32 @@ impl StreamHandler<Result<RecvStream, ConnectionError>> for StormGrokClient {
     }
 }
 
-async fn handle_client_conn(client_connection: (SendStream, RecvStream), port: u16) {
+async fn handle_client_conn(
+    client_connection: (SendStream, RecvStream),
+    port: u16,
+    traffic_log: Arc<RwLock<TrafficLog>>,
+) {
     let (mut client_send, mut client_recv) = client_connection;
     match TcpStream::connect(("127.0.0.1", port)).await {
         Ok(mut server_stream) => {
             info!("Succesfully connected client");
-            let (mut server_recv, mut server_send) = server_stream.split();
+            let (mut server_recv, server_send) = server_stream.split();
+            /*
+            Ah crap, I thought I was really clever with storing all the data that has traveled over
+            a connection but.... It doesn't work well for http forwarding mode.. The http client in
+            the stormgrokserver that takes care of proxying the traffic over here does connection
+            pooling for all incoming connections to it.
+
+            Keeping track of the seperate connections does work well with tcp forwarding though!
+            */
+            let (mut client_send, mut server_send) =
+                create_logged_writers(client_send, server_send, traffic_log.clone());
             tokio::select! {
                 _ = tokio::io::copy(&mut server_recv, &mut client_send) => {}
                 _ = tokio::io::copy(&mut client_recv, &mut server_send) => {}
             };
+            info!("Disconnected client");
+            print_full_traffic_log(traffic_log);
         }
         Err(e) => {
             error!("Encountered {:?} while connecting to {:?}", e, port);
@@ -167,7 +201,7 @@ impl StreamHandler<Result<(SendStream, RecvStream), ConnectionError>> for StormG
     ) {
         match item {
             Ok(client_connection) => {
-                handle_client_conn(client_connection, self.port)
+                handle_client_conn(client_connection, self.port, self.traffic_log.clone())
                     .into_actor(self)
                     .spawn(ctx);
             }
