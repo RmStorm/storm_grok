@@ -1,12 +1,10 @@
-use actix::Addr;
-use actix_web::{dev::ServerHandle, web, App, HttpRequest, HttpResponse, HttpServer};
-use parking_lot::Mutex;
-use parking_lot::RwLock;
-
 use std::{io::ErrorKind, net::TcpListener, sync::Arc};
 use tracing::info;
-use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{filter::LevelFilter, fmt, EnvFilter};
+
+use parking_lot::RwLock;
+
+use axum::{routing::get, Router};
 
 mod client;
 mod copy_writer;
@@ -43,17 +41,6 @@ impl From<Mode> for [u8; 1] {
     }
 }
 
-async fn index(
-    _req: HttpRequest,
-    _body: web::Bytes,
-    _srv: web::Data<Addr<client::StormGrokClient>>,
-) -> HttpResponse {
-    // info!("\nREQ: {req:?}");
-    // info!("body: {body:?}");
-    // info!("srv: {srv:?}");
-    HttpResponse::Ok().body("request replaying is cool!\n")
-}
-
 fn listen_available_port() -> TcpListener {
     for port in 4040..65535 {
         match TcpListener::bind(("127.0.0.1", port)) {
@@ -70,8 +57,12 @@ fn listen_available_port() -> TcpListener {
     panic!("No ports available")
 }
 
-#[actix_web::main]
-async fn main() -> Result<(), std::io::Error> {
+async fn index() -> &'static str {
+    "request replaying is cool!\n"
+}
+
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
     fmt()
         .with_env_filter(
@@ -85,39 +76,21 @@ async fn main() -> Result<(), std::io::Error> {
         Arc::new(RwLock::new(copy_writer::TrafficLog {
             logged_conns: Vec::new(),
         }));
-    let stop_handle = web::Data::new(StopHandle::default());
-    let client_address = client::start_client(stop_handle.clone(), cli, traffic_log.clone()).await;
+    let sg_client = client::start_client(cli, traffic_log.clone());
 
-    let server_port = listen_available_port();
+    let listener = listen_available_port();
     info!(
         "starting storm grok interface at http://{:?}",
-        server_port.local_addr()?
+        listener.local_addr().unwrap()
     );
-    let srv = HttpServer::new(move || {
-        App::new()
-            .app_data(web::Data::new(client_address.clone()))
-            .app_data(web::Data::new(traffic_log.clone()))
-            .service(web::resource("/").to(index))
-    })
-    .listen(server_port)?
-    .run();
-    stop_handle.register(srv.handle());
-    srv.await
-}
 
-// This comes from: https://github.com/actix/examples/tree/master/shutdown-server
-#[derive(Debug, Default)]
-pub struct StopHandle {
-    pub inner: Mutex<Option<ServerHandle>>,
-}
-impl StopHandle {
-    /// Sets the server handle to stop.
-    pub(crate) fn register(&self, handle: ServerHandle) {
-        *self.inner.lock() = Some(handle);
-    }
+    let app = Router::new().route("/", get(index));
+    let http_serve = axum::Server::from_tcp(listener)
+        .expect("Could not create server from TcpListener")
+        .serve(app.into_make_service());
 
-    /// Sends stop signal through contained server handle.
-    pub(crate) fn stop(&self, graceful: bool) {
-        let _ = self.inner.lock().as_ref().unwrap().stop(graceful);
-    }
+    tokio::select!(
+        _ = http_serve => {},
+        _ = sg_client => {},
+    );
 }

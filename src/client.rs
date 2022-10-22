@@ -1,21 +1,19 @@
-use crate::copy_writer::TrafficLog;
-use actix::{prelude::*, Actor, Addr, StreamHandler};
-use actix_web::{rt::net::TcpStream, web};
-use parking_lot::RwLock;
-use quinn::{
-    ClientConfig, Connection, ConnectionError, Endpoint, NewConnection, RecvStream, SendStream,
-};
-use std::sync::Arc;
-
-use tracing::log::{debug, info, warn, error};
+use futures::StreamExt;
+use std::{env, io::ErrorKind, net::SocketAddr, sync::Arc};
+use tracing::log::{debug, error, info, warn};
 use uuid::Uuid;
 
-use anyhow::Result;
-use std::{env, io::ErrorKind, net::SocketAddr};
+use parking_lot::RwLock;
+
+use tokio::net::TcpStream;
+
+use quinn::{
+    ClientConfig, Endpoint, IncomingBiStreams, IncomingUniStreams, RecvStream, SendStream,
+};
 
 use crate::{
-    copy_writer::{create_logged_writers, print_full_traffic_log},
-    dev_stuff, Cli, Mode, StopHandle,
+    copy_writer::{create_logged_writers, print_full_traffic_log, TrafficLog},
+    dev_stuff, Cli, Mode,
 };
 
 fn setup_quic_on_available_port(host: &str) -> Endpoint {
@@ -39,25 +37,15 @@ fn setup_quic_on_available_port(host: &str) -> Endpoint {
     panic!("No ports available")
 }
 
-pub struct StormGrokClient {
-    pub connection: Connection,
-    pub port: u16,
-    pub stop_handle: web::Data<StopHandle>,
-    pub traffic_log: Arc<RwLock<TrafficLog>>,
-}
-
-pub async fn start_client(
-    stop_handle: web::Data<StopHandle>,
-    cli: Cli,
-    traffic_log: Arc<RwLock<TrafficLog>>,
-) -> Addr<StormGrokClient> {
+pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
+    let mut endpoint;
     let new_connection = if cli.dev {
-        let mut endpoint = setup_quic_on_available_port("127.0.0.1");
+        endpoint = setup_quic_on_available_port("127.0.0.1");
         endpoint.set_default_client_config(dev_stuff::configure_insecure_client());
         info!("quic endpoint configured for insecure and local connections only");
         endpoint.connect("127.0.0.1:5000".parse::<SocketAddr>().unwrap(), "localhost")
     } else {
-        let mut endpoint = setup_quic_on_available_port("0.0.0.0");
+        endpoint = setup_quic_on_available_port("0.0.0.0");
         endpoint.set_default_client_config(ClientConfig::with_native_roots());
         info!("quic endpoint configured for secure connections");
         endpoint.connect(
@@ -74,7 +62,7 @@ pub async fn start_client(
         Err(_) => {
             warn!("You did not supply a JWT in the env var 'SGROK_TOKEN', using empty string to try and establish connection to server");
             "".to_string()
-        },
+        }
     };
     send.write_all(&<[u8; 1]>::from(cli.mode)).await.unwrap();
     send.write_all(token.as_bytes()).await.unwrap();
@@ -102,65 +90,34 @@ pub async fn start_client(
             }
         }
     }
-    StormGrokClient::start(cli.port, new_connection, stop_handle, traffic_log)
+    tokio::select!(
+        _ = handle_uni_conns_loop(new_connection.uni_streams) => {},
+        _ = handle_bi_conns_loop(new_connection.bi_streams, cli.port, traffic_log) => {},
+    );
+    endpoint.wait_idle().await;
 }
 
-impl Actor for StormGrokClient {
-    type Context = Context<Self>;
-
-    fn started(&mut self, _ctx: &mut Context<Self>) {
-        info!("StormGrokClient started");
-    }
-    fn stopped(&mut self, _ctx: &mut Context<Self>) {
-        info!("Party is over!");
-        self.stop_handle.stop(true)
-    }
-}
-
-impl StormGrokClient {
-    fn start(
-        port: u16,
-        new_conn: NewConnection,
-        stop_handle: web::Data<StopHandle>,
-        traffic_log: Arc<RwLock<TrafficLog>>,
-    ) -> Addr<Self> {
-        StormGrokClient::create(|ctx| {
-            ctx.add_stream(new_conn.bi_streams);
-            ctx.add_stream(new_conn.uni_streams);
-            StormGrokClient {
-                port: port,
-                connection: new_conn.connection,
-                stop_handle: stop_handle,
-                traffic_log: traffic_log,
-            }
-        })
+async fn handle_uni_conns_loop(mut uni_streams: IncomingUniStreams) {
+    while let Some(stream) = uni_streams.next().await {
+        let recv = stream.unwrap();
+        let buffed_data = recv.read_to_end(100).await.unwrap();
+        if buffed_data != b"ping".to_vec() {
+            info!(
+                "received from server: {:?}",
+                String::from_utf8_lossy(&buffed_data)
+            );
+        }
     }
 }
 
-async fn handle_uni_stream(stream: Result<RecvStream, ConnectionError>) -> Result<()> {
-    let recv = stream?;
-    let buffed_data = recv.read_to_end(100).await?;
-    if buffed_data != b"ping".to_vec() {
-        info!(
-            "received from server: {:?}",
-            String::from_utf8_lossy(&buffed_data)
-        );
-    }
-    Ok(())
-}
-
-impl StreamHandler<Result<RecvStream, ConnectionError>> for StormGrokClient {
-    fn handle(&mut self, item: Result<RecvStream, ConnectionError>, ctx: &mut Self::Context) {
-        handle_uni_stream(item)
-            .into_actor(self)
-            .then(|res, _act, ctx| {
-                if let Err(err) = res {
-                    error!("encountered connection error in uni_stream: {:?}", err);
-                    ctx.stop();
-                }
-                fut::ready(())
-            })
-            .spawn(ctx);
+async fn handle_bi_conns_loop(
+    mut bi_streams: IncomingBiStreams,
+    port: u16,
+    traffic_log: Arc<RwLock<TrafficLog>>,
+) {
+    while let Some(stream) = bi_streams.next().await {
+        info!("Incoming bi stream");
+        handle_client_conn(stream.unwrap(), port, traffic_log.clone()).await;
     }
 }
 
@@ -169,6 +126,7 @@ async fn handle_client_conn(
     port: u16,
     traffic_log: Arc<RwLock<TrafficLog>>,
 ) {
+    info!("were here?");
     let (mut client_send, mut client_recv) = client_connection;
     match TcpStream::connect(("127.0.0.1", port)).await {
         Ok(mut server_stream) => {
@@ -194,26 +152,6 @@ async fn handle_client_conn(
         Err(e) => {
             error!("Encountered {:?} while connecting to {:?}", e, port);
             client_send.finish().await.unwrap();
-        }
-    }
-}
-
-impl StreamHandler<Result<(SendStream, RecvStream), ConnectionError>> for StormGrokClient {
-    fn handle(
-        &mut self,
-        item: Result<(SendStream, RecvStream), ConnectionError>,
-        ctx: &mut Self::Context,
-    ) {
-        match item {
-            Ok(client_connection) => {
-                handle_client_conn(client_connection, self.port, self.traffic_log.clone())
-                    .into_actor(self)
-                    .spawn(ctx);
-            }
-            Err(err) => {
-                error!("encountered connection error in bistream: {:?}", err);
-                ctx.stop();
-            }
         }
     }
 }
