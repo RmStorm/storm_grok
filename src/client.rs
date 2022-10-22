@@ -7,10 +7,10 @@ use quinn::{
 };
 use std::sync::Arc;
 
-use tracing::log::{debug, error, info};
+use tracing::log::{debug, info, warn, error};
 use uuid::Uuid;
 
-use anyhow::{Context as AH_Context, Result};
+use anyhow::Result;
 use std::{env, io::ErrorKind, net::SocketAddr};
 
 use crate::{
@@ -68,9 +68,14 @@ pub async fn start_client(
     let new_connection = new_connection.unwrap().await.unwrap();
 
     let (mut send, recv) = new_connection.connection.open_bi().await.unwrap();
-    let token: String = env::var("SGROK_TOKEN")
-        .context("You need to supply a jwt in env var SGROK_TOKEN")
-        .unwrap();
+
+    let token: String = match env::var("SGROK_TOKEN") {
+        Ok(token) => token,
+        Err(_) => {
+            warn!("You did not supply a JWT in the env var 'SGROK_TOKEN', using empty string to try and establish connection to server");
+            "".to_string()
+        },
+    };
     send.write_all(&<[u8; 1]>::from(cli.mode)).await.unwrap();
     send.write_all(token.as_bytes()).await.unwrap();
     send.finish().await.unwrap();
@@ -93,7 +98,7 @@ pub async fn start_client(
             let uuid = Uuid::from_bytes(response_bytes.try_into().unwrap());
             match cli.dev {
                 true => info!("curl http://{:?}.localhost:3000", uuid),
-                false => info!("curl https://{:?}.stormgrok.nl:3000", uuid),
+                false => info!("curl https://{:?}.stormgrok.nl", uuid),
             }
         }
     }
