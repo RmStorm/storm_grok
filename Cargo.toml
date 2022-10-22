@@ -1,22 +1,2 @@
-[package]
-name = "quic_client"
-version = "0.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-axum = "0.5"
-tokio = { version = "1", features = ["full"] }
-hyper = { version = "0.14", features = ["full"] }
-parking_lot = "0.12.1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-quinn = "0.8.5"
-rustls = { version = "*", features = ["dangerous_configuration", "quic"] }
-futures = "0.3"
-futures-util = "0.3.24"
-anyhow = "1.0.65"
-uuid = { version = "1.1.2", features = ["v4", "fast-rng"] }
-clap = { version = "3.2.22", features = ["derive"] }
-chrono = "0.4"
+[workspace]
+members = ["server", "frontend"]
