@@ -1,22 +1,31 @@
 [package]
-name = "storm_grok"
+name = "sg_server"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+hyper-reverse-proxy = { git = "https://github.com/felipenoris/hyper-reverse-proxy", rev = "e73a76600ce9e51e962de5266b03be596e6c1d50" }
 axum = "0.5"
+axum-server = { version = "0.4.2", features = ["tls-rustls"] }
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "0.14", features = ["full"] }
+tower = "0.4.13"
+futures = "0.3"
+hyper-rustls = "0.23.0"
 parking_lot = "0.12.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 quinn = "0.8.5"
 rustls = { version = "*", features = ["dangerous_configuration", "quic"] }
-futures = "0.3"
+rustls-pemfile = "1.0.1"
 futures-util = "0.3.24"
 anyhow = "1.0.65"
+rcgen = "0.9.3"
 uuid = { version = "1.1.2", features = ["v4", "fast-rng"] }
-clap = { version = "3.2.22", features = ["derive"] }
-chrono = "0.4"
+jsonwebtoken = "8"
+serde = {version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+config = "0.10"
+regex = "1.6.0"

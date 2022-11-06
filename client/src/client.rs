@@ -1,4 +1,5 @@
 use futures::StreamExt;
+use rustls::{ClientConfig, KeyLogFile};
 use std::{env, io::ErrorKind, net::SocketAddr, sync::Arc};
 use tracing::log::{debug, error, info, warn};
 use uuid::Uuid;
@@ -7,12 +8,10 @@ use parking_lot::RwLock;
 
 use tokio::net::TcpStream;
 
-use quinn::{
-    ClientConfig, Endpoint, IncomingBiStreams, IncomingUniStreams, RecvStream, SendStream,
-};
+use quinn::{Endpoint, IncomingBiStreams, IncomingUniStreams, RecvStream, SendStream};
 
 use crate::{
-    copy_writer::{create_logged_writers, print_full_traffic_log, TrafficLog},
+    copy_writer::{create_logged_writers, TrafficLog},
     dev_stuff, Cli, Mode,
 };
 
@@ -46,7 +45,22 @@ pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
         endpoint.connect("127.0.0.1:5000".parse::<SocketAddr>().unwrap(), "localhost")
     } else {
         endpoint = setup_quic_on_available_port("0.0.0.0");
-        endpoint.set_default_client_config(ClientConfig::with_native_roots());
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+            rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+                ta.subject,
+                ta.spki,
+                ta.name_constraints,
+            )
+        }));
+        let mut client_config = ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        // this is the fun option
+        client_config.key_log = Arc::new(KeyLogFile::new());
+        let clc = quinn::ClientConfig::new(Arc::new(client_config));
+        endpoint.set_default_client_config(clc);
         info!("quic endpoint configured for secure connections");
         endpoint.connect(
             "157.90.124.255:5000".parse::<SocketAddr>().unwrap(),
@@ -143,11 +157,11 @@ async fn handle_client_conn(
             let (mut client_send, mut server_send) =
                 create_logged_writers(client_send, server_send, traffic_log.clone());
             tokio::select! {
-                _ = tokio::io::copy(&mut server_recv, &mut client_send) => {}
+                _ = tokio::io::copy(&mut server_recv, &mut client_send) => {info!("Server hit EOF")}
                 _ = tokio::io::copy(&mut client_recv, &mut server_send) => {}
             };
             info!("Disconnected client");
-            print_full_traffic_log(traffic_log);
+            info!("Full traffic log: {:?}", traffic_log.read());
         }
         Err(e) => {
             error!("Encountered {:?} while connecting to {:?}", e, port);

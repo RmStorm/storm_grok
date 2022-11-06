@@ -1,0 +1,11 @@
+[server]
+http_port = "3000"
+http_host = "[::1]"
+quic_host = "127.0.0.1"
+
+[log]
+level = "debug"
+format = "pretty"
+
+[auth]
+enabled = false

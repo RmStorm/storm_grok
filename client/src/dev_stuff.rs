@@ -1,5 +1,6 @@
 use anyhow::Result;
 use quinn::ClientConfig;
+use rustls::KeyLogFile;
 use std::sync::Arc;
 
 struct SkipServerVerification;
@@ -25,9 +26,10 @@ impl rustls::client::ServerCertVerifier for SkipServerVerification {
 }
 
 pub fn configure_insecure_client() -> ClientConfig {
-    let crypto = rustls::ClientConfig::builder()
+    let mut crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_custom_certificate_verifier(SkipServerVerification::new())
         .with_no_client_auth();
+    crypto.key_log = Arc::new(KeyLogFile::new());
     ClientConfig::new(Arc::new(crypto))
 }

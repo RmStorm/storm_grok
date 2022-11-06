@@ -1,96 +1,151 @@
-use std::{io::ErrorKind, net::TcpListener, sync::Arc};
-use tracing::info;
-use tracing_subscriber::{filter::LevelFilter, fmt, EnvFilter};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
+use jsonwebtoken::DecodingKey;
 use parking_lot::RwLock;
+use tracing::{info, warn};
+use uuid::Uuid;
 
-use axum::{routing::get, Router};
+use hyper::client::HttpConnector;
+use hyper_rustls::HttpsConnector;
+use rustls::ServerConfig;
 
-mod client;
-mod copy_writer;
-mod dev_stuff;
+use tower::util::ServiceExt;
 
-use clap::Parser;
-use clap::ValueEnum;
+use axum::{
+    body::Body,
+    extract::{ConnectInfo, Host},
+    http::{status::StatusCode, Request},
+    response::Response,
+    routing::any,
+    Extension, Router,
+};
+use axum_server::tls_rustls::RustlsConfig;
 
-#[derive(Parser)]
-#[clap(author, version, about, long_about = None)]
-pub struct Cli {
-    /// What mode to run the program in
-    #[clap(arg_enum, value_parser)]
-    mode: Mode,
-    /// Port to forward to
-    #[clap(value_parser = clap::value_parser!(u16).range(1..65536))]
-    port: u16,
-    #[clap(long, short, action)]
-    dev: bool,
-}
+mod google_key_store;
+mod server;
+mod session;
+mod settings;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-enum Mode {
-    Http,
-    Tcp,
-}
+type KeyMap = Arc<RwLock<HashMap<String, DecodingKey>>>;
+type ClientMap = Arc<RwLock<HashMap<Uuid, String>>>;
+type HttpClient = hyper::client::Client<HttpConnector, Body>;
+type HttpsClient = hyper::client::Client<HttpsConnector<HttpConnector>, Body>;
 
-impl From<Mode> for [u8; 1] {
-    fn from(mode: Mode) -> [u8; 1] {
-        match mode {
-            Mode::Tcp => [116],  // 116 = t in ascii
-            Mode::Http => [104], // 104 = h in ascii
+async fn forwarder(
+    Extension(client): Extension<HttpClient>,
+    Extension(client_map): Extension<ClientMap>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    host: Host,
+    req: Request<Body>,
+) -> Response<Body> {
+    let uuid = resolve_uuid_from_host(&host.0).unwrap();
+    let target = match client_map.read().get(&uuid) {
+        Some(target) => format!("http://{}", target),
+        None => {
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("No active client found\n"))
+                .unwrap();
         }
+    };
+    match hyper_reverse_proxy::call(addr.ip(), &target, req, &client).await {
+        Ok(response) => response,
+        Err(_error) => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::empty())
+            .unwrap(),
     }
 }
 
-fn listen_available_port() -> TcpListener {
-    for port in 4040..65535 {
-        match TcpListener::bind(("127.0.0.1", port)) {
-            Ok(l) => return l,
-            Err(error) => match error.kind() {
-                ErrorKind::AddrInUse => {}
-                other_error => panic!(
-                    "Encountered errr while setting up tcp server: {:?}",
-                    other_error
-                ),
-            },
-        }
-    }
-    panic!("No ports available")
+async fn handler(Extension(client_map): Extension<ClientMap>, host: Host) -> &'static str {
+    println!("{:?}", host);
+    println!("{:?}", client_map);
+    "🚀Safesixx is het gaafst!!🚀\n"
 }
 
-async fn index() -> &'static str {
-    "request replaying is cool!\n"
+fn resolve_uuid_from_host(host: &str) -> Option<Uuid> {
+    let client_id = host.split(".").next()?;
+    let id = Uuid::parse_str(client_id).ok();
+    id
 }
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
-    fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
+    let config = settings::Settings::new();
+    let key_store: KeyMap = Arc::new(RwLock::new(HashMap::new()));
+    let client_map: ClientMap = Arc::new(RwLock::new(HashMap::new()));
+    let sg_server = server::start_storm_grok_server(&config, client_map.clone(), key_store.clone());
+
+    let http_client: HttpClient = hyper::Client::new();
+
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .https_only()
+        .enable_http1()
+        .build();
+    let https_client: HttpsClient = hyper::Client::builder().build(https);
+
+    let forwarder_router = Router::new().route("/*path", any(forwarder));
+    let default_router = Router::new().route("/*path", any(handler));
+
+    let app = Router::new()
+        .route(
+            "/*path",
+            any(|Host(hostname): Host, request: Request<Body>| async move {
+                match resolve_uuid_from_host(hostname.as_str()) {
+                    Some(_uuid) => forwarder_router.oneshot(request).await,
+                    None => default_router.oneshot(request).await,
+                }
+            }),
         )
-        .event_format(fmt::format().pretty())
-        .init();
-    let traffic_log: Arc<RwLock<copy_writer::TrafficLog>> =
-        Arc::new(RwLock::new(copy_writer::TrafficLog {
-            logged_conns: Vec::new(),
-        }));
-    let sg_client = client::start_client(cli, traffic_log.clone());
+        .layer(Extension(client_map))
+        .layer(Extension(http_client));
 
-    let listener = listen_available_port();
-    info!(
-        "starting storm grok interface at http://{:?}",
-        listener.local_addr().unwrap()
-    );
+    let addr = format!("{}:{}", config.server.http_host, config.server.http_port);
+    info!("starting storm grok server at {}", addr);
+    let addr: SocketAddr = addr.parse().unwrap();
+    match config.auth.enabled {
+        true => info!(
+            "Running with authentication enabled on client connections, rules are: {:?}",
+            config.auth
+        ),
+        false => warn!(
+            "RUNNING WITHOUT AUTHENTICATION!! Anyone can use your instance to tunnel any traffic!"
+        ),
+    }
 
-    let app = Router::new().route("/", get(index));
-    let http_serve = axum::Server::from_tcp(listener)
-        .expect("Could not create server from TcpListener")
-        .serve(app.into_make_service());
+    if config.env == settings::ENV::Prod {
+        let (certs, key) = config.get_certs_and_key();
+        let tls_config = RustlsConfig::from_config(Arc::new(
+            ServerConfig::builder()
+                .with_safe_defaults()
+                .with_no_client_auth()
+                .with_single_cert(certs, key)
+                .expect("bad certificate/key"),
+        ));
+        let http_serve = axum_server::bind_rustls(addr, tls_config)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>());
+        tokio::select!(
+            _ = http_serve => {},
+            _ = sg_server => {},
+            _ = google_key_store::refresh_loop(key_store, https_client) => {},
+        );
+    } else {
+        let http_serve =
+            axum_server::bind(addr).serve(app.into_make_service_with_connect_info::<SocketAddr>());
+        tokio::select!(
+            _ = http_serve => {},
+            _ = sg_server => {},
+            _ = google_key_store::refresh_loop(key_store, https_client) => {},
+        );
+    };
+}
 
-    tokio::select!(
-        _ = http_serve => {},
-        _ = sg_client => {},
-    );
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[should_panic]
+    fn another() {
+        panic!("Make this test fail");
+    }
 }

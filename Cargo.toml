@@ -1,2 +1,9 @@
 [workspace]
-members = ["server", "frontend"]
+members = ["server", "client", "frontend", "tests"]
+
+# release profile tips from: https://github.com/johnthagen/min-sized-rust
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"
+debug = 1

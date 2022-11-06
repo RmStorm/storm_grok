@@ -1,0 +1,11 @@
+[server]
+http_port = "443"
+http_host = "[::]"
+quic_host = "0.0.0.0"
+
+[log]
+level = "info"
+format = "compact"
+
+[auth]
+enabled = true

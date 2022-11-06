@@ -1,0 +1,6 @@
+[server]
+quic_port = "5000"
+
+[auth]
+users = ["roaldstorm@gmail.com"]
+host_domains = ["oda.com"]

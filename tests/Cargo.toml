@@ -1,0 +1,16 @@
+[package]
+name = "tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dev-dependencies]
+regex = "1"
+color-eyre = "0.5"
+tokio = { version = "1", features = ["full"] }
+hyper = { version = "0.14", features = ["full"] }
+hyper-timeout = "0.4"
+
+[[test]]
+name = "test_transfer_site"
+path = "integration_test.rs"
