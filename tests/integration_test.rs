@@ -1,4 +1,5 @@
 use std::io::BufRead;
+use std::io::Read;
 use std::time::Duration;
 
 use regex::Regex;
@@ -37,31 +38,51 @@ fn make_http_client() -> TimeoutClient {
 }
 
 struct ChildWrapper {
+    name: &'static str,
     inner: std::process::Child,
 }
 impl Drop for ChildWrapper {
-    fn drop(&mut self) {
+    fn drop(self: &mut ChildWrapper) {
+        println!("Killing {:?}", self.name);
         self.inner.kill().expect("command wasn't running");
+
+        if let Some(mut stdout) = self.inner.stdout.take() {
+            let mut buffer = Vec::new();
+            stdout.read_to_end(&mut buffer).unwrap();
+            if buffer.len() != 0 {
+                println!("Printing stdout for {:?}:", self.name);
+                println!("{}", std::str::from_utf8(&buffer).unwrap());
+            }
+        }
+
+        if let Some(mut stderr) = self.inner.stderr.take() {
+            let mut buffer = Vec::new();
+            stderr.read_to_end(&mut buffer).unwrap();
+            if buffer.len() != 0 {
+                println!("Printing stderr for {:?}:", self.name);
+                println!("{}", std::str::from_utf8(&buffer).unwrap());
+            }
+        }
     }
 }
 impl ChildWrapper {
-    fn new(mut cmd: std::process::Command, args: &[&str]) -> ChildWrapper {
+    fn new(cmd: &'static str, args: &[&str]) -> ChildWrapper {
         ChildWrapper {
-            inner: cmd
+            name: cmd,
+            inner: get_test_bin(&cmd)
                 .args(args)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::inherit())
                 .spawn()
                 .expect("Failed to start command"),
         }
     }
     fn wait_for_log_pattern(&mut self, pattern: Regex, capture_index: usize) -> String {
-        println!("Searching for {:?}", pattern);
+        println!("Searching for '{:?}' in logs of {:?}", pattern, self.name);
         let stdout = self.inner.stdout.as_mut().unwrap();
         for line in std::io::BufReader::new(stdout).lines() {
-            println!("Read: {:?}", line);
             if let Some(cap) = pattern.captures(&line.unwrap()) {
-                println!("capture! {:?}", cap);
                 return cap[capture_index].to_string();
             }
         }
@@ -72,18 +93,15 @@ impl ChildWrapper {
 #[tokio::test]
 async fn test_sg_binary() {
     color_eyre::install().unwrap();
-    let mut server = ChildWrapper::new(get_test_bin("sg_server"), &[]);
+    let mut server = ChildWrapper::new("sg_server", &[]);
     let re = Regex::new(r"Starting Quic server on").unwrap();
     server.wait_for_log_pattern(re, 0);
 
-    let mut client = ChildWrapper::new(get_test_bin("storm_grok"), &["http", "4040", "-d"]);
+    let mut client = ChildWrapper::new("storm_grok", &["http", "4040", "-d"]);
     let re = Regex::new(r"curl (http://[^.]*.localhost:3000)").unwrap();
     let url = client.wait_for_log_pattern(re, 1);
 
-    println!("{:?}", url);
     let http_client = make_http_client();
-    let resp = http_client.get(url.parse().unwrap()).await.unwrap();
-    assert_eq!(resp.status(), 200);
 
     let (wasm_resp, js_resp) = tokio::join!(
         http_client.get(url.parse().unwrap()),

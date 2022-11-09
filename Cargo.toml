@@ -2,6 +2,7 @@
 members = ["server", "client", "frontend", "tests"]
 
 # release profile tips from: https://github.com/johnthagen/min-sized-rust
+# and: https://fasterthanli.me/articles/why-is-my-rust-build-so-slow
 [profile.release]
 strip = true
 lto = true
