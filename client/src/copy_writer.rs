@@ -6,7 +6,6 @@ use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
-use tracing::log::info;
 
 pub struct CopyWriter<T: AsyncWrite + Unpin> {
     pub writer: Pin<Box<T>>,
@@ -33,11 +32,6 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for CopyWriter<T> {
                 false => logged_conn.traffic_out.push(ob),
             }
         }
-        match self.writer.as_mut().poll_flush(cx) {
-            std::task::Poll::Ready(Ok(r)) => info!("Polled flush got done {:?}", r),
-            std::task::Poll::Ready(Err(e)) => info!("Polled flsuh got e {:?}", e),
-            std::task::Poll::Pending => info!("Polled flsuh got pending"),
-        }
         self.writer.as_mut().poll_write(cx, buf)
     }
 
@@ -45,7 +39,6 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for CopyWriter<T> {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        info!("I dont flush mymans");
         self.writer.as_mut().poll_flush(cx)
     }
 

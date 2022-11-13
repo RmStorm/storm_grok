@@ -3,9 +3,7 @@ use rustls::{Certificate, PrivateKey};
 use rustls_pemfile;
 
 use serde::Deserialize;
-use std::fs;
-use std::io::BufReader;
-use std::path::PathBuf;
+use std::{fs, io::BufReader, path::PathBuf};
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Debug, Deserialize, Clone)]

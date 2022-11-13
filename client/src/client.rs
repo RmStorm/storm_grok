@@ -109,7 +109,7 @@ pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
             http_server_port = env::var("SG__SERVER__HTTP_PORT").unwrap_or("3000".into());
             let uuid = Uuid::from_bytes(response_bytes.try_into().unwrap());
             match cli.dev {
-                true => info!("curl http://{:?}.localhost:{}/api/hello", uuid, http_server_port),
+                true => info!("curl http://{:?}.localhost:{}", uuid, http_server_port),
                 false => info!("curl https://{:?}.stormgrok.nl", uuid),
             }
         }
@@ -141,7 +141,9 @@ async fn handle_bi_conns_loop(
 ) {
     while let Some(stream) = bi_streams.next().await {
         info!("Incoming bi stream");
-        handle_client_conn(stream.unwrap(), port, traffic_log.clone()).await;
+        let traffic_log = traffic_log.clone();
+        let stream = stream.unwrap();
+        tokio::spawn(async move { handle_client_conn(stream, port, traffic_log).await });
     }
 }
 
@@ -150,22 +152,23 @@ async fn handle_client_conn(
     port: u16,
     traffic_log: Arc<RwLock<TrafficLog>>,
 ) {
-    info!("were here?");
     let (mut client_send, mut client_recv) = client_connection;
     match TcpStream::connect(("127.0.0.1", port)).await {
         Ok(mut server_stream) => {
             info!("Succesfully connected client");
-            let (mut server_recv, mut server_send) = server_stream.split();
+            let (mut server_recv, server_send) = server_stream.split();
             /*
             Ah crap, I thought I was really clever with storing all the data that has traveled over
             a connection but.... It doesn't work well for http forwarding mode.. The http client in
             the stormgrokserver that takes care of proxying the traffic over here does connection
-            pooling for all incoming connections to it.
+            pooling for all incoming connections to it.. It can still choose to make several
+            connections under highly concurrent loads though!! But fundamentally it will pool so
+            watching the bytes on a single connection is not all that usefull in http mode..
 
             Keeping track of the seperate connections does work well with tcp forwarding though!
             */
-            // let (mut client_send, mut server_send) =
-            //     create_logged_writers(client_send, server_send, traffic_log.clone());
+            let (mut client_send, mut server_send) =
+                create_logged_writers(client_send, server_send, traffic_log.clone());
             tokio::select! {
                 _ = tokio::io::copy(&mut server_recv, &mut client_send) => {info!("Server hit EOF")}
                 _ = tokio::io::copy(&mut client_recv, &mut server_send) => {}

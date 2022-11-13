@@ -63,6 +63,7 @@ async fn connect_tcp_to_bi_quic(listener: RegisteredListener, connection: Connec
                 return;
             }
         };
+        debug!("Made new biquic {:?}", server_send);
         tokio::spawn(async move {
             let (mut client_recv, mut client_send) = client.split();
             tokio::select! {
