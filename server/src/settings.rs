@@ -5,6 +5,7 @@ use rustls_pemfile;
 use serde::Deserialize;
 use std::fs;
 use std::io::BufReader;
+use std::path::PathBuf;
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Debug, Deserialize, Clone)]
@@ -58,33 +59,39 @@ pub struct Settings {
     pub env: ENV,
 }
 
+fn guess_config_file() -> PathBuf {
+    // All of this path guessing shit is crap 💩 but it works
+    // core problem is that the path differs when running this in the integratoin test or not.
+    // maybe an env var would be a better solution
+    let mut config_file_dir = std::env::current_dir().unwrap().join("config");
+    if !config_file_dir.is_dir() {
+        config_file_dir.pop();
+        if let Some(path) = config_file_dir.file_name() {
+            if path.to_str().unwrap() == "tests" {
+                config_file_dir.pop();
+            }
+        }
+        config_file_dir.push("server/config");
+    }
+    assert!(config_file_dir.is_dir());
+    config_file_dir
+}
+
 impl Settings {
     pub fn new() -> Self {
         let env = std::env::var("RUN_ENV").unwrap_or_else(|_| "Dev".into());
-        let mut s = Config::new();
-        s.set("env", env.clone()).unwrap();
 
-        // All of this path guessing shit is crap 💩 but it works
-        let mut config_file_dir = std::env::current_dir().unwrap().join("config");
-        if !config_file_dir.is_dir() {
-            config_file_dir.pop();
-            if let Some(path) = config_file_dir.file_name() {
-                if path.to_str().unwrap() == "tests" {
-                    config_file_dir.pop();
-                }
-            }
-            config_file_dir.push("server/config");
-        }
-        assert!(config_file_dir.is_dir());
-
-        s.merge(File::from(config_file_dir.join("Default.toml")))
+        let config_file_dir = guess_config_file();
+        let config: Settings = Config::builder()
+            .set_override("env", env.clone())
+            .unwrap()
+            .add_source(File::from(config_file_dir.join("Default.toml")))
+            .add_source(File::from(config_file_dir.join(env)))
+            .add_source(Environment::with_prefix("SG").separator("__"))
+            .build()
+            .unwrap()
+            .try_deserialize()
             .unwrap();
-        s.merge(File::from(config_file_dir.join(env))).unwrap();
-
-        // This allows env vars like "EA_SERVER__PORT to override server.port
-        s.merge(Environment::with_prefix("sg").separator("__"))
-            .unwrap();
-        let config: Settings = s.try_into().unwrap();
 
         let subscriber = fmt().with_env_filter(EnvFilter::try_new(&config.log.level).unwrap());
         match config.log.format.as_str() {

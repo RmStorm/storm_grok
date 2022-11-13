@@ -16,7 +16,7 @@ use crate::{
 };
 
 fn setup_quic_on_available_port(host: &str) -> Endpoint {
-    for port in 5001..65535 {
+    for port in 6001..65535 {
         let socket: SocketAddr = format!("{host}:{port:?}")
             .as_str()
             .parse::<SocketAddr>()
@@ -38,11 +38,18 @@ fn setup_quic_on_available_port(host: &str) -> Endpoint {
 
 pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
     let mut endpoint;
+    let http_server_port: String;
+    let quic_server_port: String = env::var("SG__SERVER__QUIC_PORT").unwrap_or("5000".into());
+
     let new_connection = if cli.dev {
         endpoint = setup_quic_on_available_port("127.0.0.1");
         endpoint.set_default_client_config(dev_stuff::configure_insecure_client());
-        info!("quic endpoint configured for insecure and local connections only");
-        endpoint.connect("127.0.0.1:5000".parse::<SocketAddr>().unwrap(), "localhost")
+        let socket_addr = format!("127.0.0.1:{}", quic_server_port);
+        info!(
+            "quic endpoint at {:?} configured for local, insecure connections only",
+            socket_addr
+        );
+        endpoint.connect(socket_addr.parse::<SocketAddr>().unwrap(), "localhost")
     } else {
         endpoint = setup_quic_on_available_port("0.0.0.0");
         let mut root_store = rustls::RootCertStore::empty();
@@ -61,11 +68,13 @@ pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
         client_config.key_log = Arc::new(KeyLogFile::new());
         let clc = quinn::ClientConfig::new(Arc::new(client_config));
         endpoint.set_default_client_config(clc);
-        info!("quic endpoint configured for secure connections");
-        endpoint.connect(
-            "157.90.124.255:5000".parse::<SocketAddr>().unwrap(),
-            "stormgrok.nl",
-        )
+
+        let socket_addr = format!("157.90.124.255:{}", quic_server_port);
+        info!(
+            "quic endpoint at {:?} onfigured for secure connections",
+            socket_addr
+        );
+        endpoint.connect(socket_addr.parse::<SocketAddr>().unwrap(), "stormgrok.nl")
     };
     let new_connection = new_connection.unwrap().await.unwrap();
 
@@ -97,9 +106,10 @@ pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
             }
         }
         Mode::Http => {
+            http_server_port = env::var("SG__SERVER__HTTP_PORT").unwrap_or("3000".into());
             let uuid = Uuid::from_bytes(response_bytes.try_into().unwrap());
             match cli.dev {
-                true => info!("curl http://{:?}.localhost:3000", uuid),
+                true => info!("curl http://{:?}.localhost:{}/api/hello", uuid, http_server_port),
                 false => info!("curl https://{:?}.stormgrok.nl", uuid),
             }
         }
@@ -145,7 +155,7 @@ async fn handle_client_conn(
     match TcpStream::connect(("127.0.0.1", port)).await {
         Ok(mut server_stream) => {
             info!("Succesfully connected client");
-            let (mut server_recv, server_send) = server_stream.split();
+            let (mut server_recv, mut server_send) = server_stream.split();
             /*
             Ah crap, I thought I was really clever with storing all the data that has traveled over
             a connection but.... It doesn't work well for http forwarding mode.. The http client in
@@ -154,8 +164,8 @@ async fn handle_client_conn(
 
             Keeping track of the seperate connections does work well with tcp forwarding though!
             */
-            let (mut client_send, mut server_send) =
-                create_logged_writers(client_send, server_send, traffic_log.clone());
+            // let (mut client_send, mut server_send) =
+            //     create_logged_writers(client_send, server_send, traffic_log.clone());
             tokio::select! {
                 _ = tokio::io::copy(&mut server_recv, &mut client_send) => {info!("Server hit EOF")}
                 _ = tokio::io::copy(&mut client_recv, &mut server_send) => {}

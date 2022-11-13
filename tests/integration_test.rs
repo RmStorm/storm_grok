@@ -1,10 +1,15 @@
-use std::io::BufRead;
-use std::io::Read;
-use std::time::Duration;
-
 use regex::Regex;
 
-use hyper::Client;
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Client, Request, Response, Server};
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    io::{BufRead, ErrorKind, Read},
+    net::TcpListener,
+    time::Duration,
+};
+
 use hyper_timeout::TimeoutConnector;
 
 fn get_test_bin(bin_name: &str) -> std::process::Command {
@@ -66,10 +71,11 @@ impl Drop for ChildWrapper {
     }
 }
 impl ChildWrapper {
-    fn new(cmd: &'static str, args: &[&str]) -> ChildWrapper {
+    fn new(cmd: &'static str, args: &[&str], envs: HashMap<&str, &str>) -> ChildWrapper {
         ChildWrapper {
             name: cmd,
             inner: get_test_bin(&cmd)
+                .envs(envs)
                 .args(args)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
@@ -82,7 +88,10 @@ impl ChildWrapper {
         println!("Searching for '{:?}' in logs of {:?}", pattern, self.name);
         let stdout = self.inner.stdout.as_mut().unwrap();
         for line in std::io::BufReader::new(stdout).lines() {
-            if let Some(cap) = pattern.captures(&line.unwrap()) {
+            let l = line.unwrap();
+            let ll = l.as_str();
+            println!("line: {}", ll);
+            if let Some(cap) = pattern.captures(ll) {
                 return cap[capture_index].to_string();
             }
         }
@@ -90,16 +99,77 @@ impl ChildWrapper {
     }
 }
 
-#[tokio::test]
-async fn test_sg_binary() {
-    color_eyre::install().unwrap();
-    let mut server = ChildWrapper::new("sg_server", &[]);
+fn listen_available_port(start_port: u16) -> TcpListener {
+    for port in start_port..65535 {
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => return l,
+            Err(error) => match error.kind() {
+                ErrorKind::AddrInUse => {}
+                other_error => panic!(
+                    "Encountered errr while setting up tcp server: {:?}",
+                    other_error
+                ),
+            },
+        }
+    }
+    panic!("No ports available")
+}
+
+async fn handle(_: Request<Body>) -> Result<Response<Body>, Infallible> {
+    dbg!("HANDLED!!");
+    Ok(Response::new("Hello, World!".into()))
+}
+
+async fn start_server_and_client(quic_port: &str, http_port: &str) -> (ChildWrapper, ChildWrapper) {
+    let make_svc = make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(handle)) });
+    let listener = listen_available_port(2020);
+    let port = listener.local_addr().unwrap().port().to_string();
+    let server = Server::from_tcp(listener).unwrap().serve(make_svc);
+    tokio::spawn(async move { server.await });
+
+    let envs = HashMap::from([
+        ("SG__LOG__LEVEL", "info"),
+        ("SG__LOG__FORMAT", "compact"),
+        ("SG__SERVER__QUIC_PORT", quic_port),
+        ("SG__SERVER__HTTP_PORT", http_port),
+    ]);
+    let mut server = ChildWrapper::new("sg_server", &[], envs.clone());
     let re = Regex::new(r"Starting Quic server on").unwrap();
     server.wait_for_log_pattern(re, 0);
 
-    let mut client = ChildWrapper::new("storm_grok", &["http", "4040", "-d"]);
-    let re = Regex::new(r"curl (http://[^.]*.localhost:3000)").unwrap();
+    let client = ChildWrapper::new("storm_grok", &["http", &port, "-d"], envs);
+    (server, client)
+}
+
+#[tokio::test]
+async fn tunnel_single_request_1() {
+    let (_server, mut client) = start_server_and_client("5000", "3000").await;
+    let re = Regex::new(r"curl (http://[^.]*.localhost:\d\d\d\d)").unwrap();
     let url = client.wait_for_log_pattern(re, 1);
+    let http_client = make_http_client();
+
+    let resp = http_client.get(url.parse().unwrap()).await;
+    assert_eq!(resp.unwrap().status(), 200);
+}
+
+#[tokio::test]
+async fn tunnel_single_request_2() {
+    let (_server, mut client) = start_server_and_client("5001", "3001").await;
+    let re = Regex::new(r"curl (http://[^.]*.localhost:\d\d\d\d)").unwrap();
+    let url = client.wait_for_log_pattern(re, 1);
+
+    let http_client = make_http_client();
+
+    let resp = http_client.get(url.parse().unwrap()).await;
+    assert_eq!(resp.unwrap().status(), 200);
+}
+
+#[tokio::test]
+async fn tunnel_concurrent_requests() {
+    let (_server, mut client) = start_server_and_client("5002", "3002").await;
+    let re = Regex::new(r"curl (http://[^.]*.localhost:\d\d\d\d)").unwrap();
+    let url = client.wait_for_log_pattern(re, 1);
+    println!("url: {:?}", url);
 
     let http_client = make_http_client();
 

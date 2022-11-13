@@ -69,7 +69,7 @@ fn listen_available_port() -> TcpListener {
 }
 
 async fn hello() -> &'static str {
-    "Some response eeeyyy"
+    "Some response eeeyyy\n"
 }
 
 async fn get_traffic_log(
