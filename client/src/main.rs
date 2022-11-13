@@ -128,7 +128,7 @@ async fn main() {
 
     let listener = listen_available_port();
     info!(
-        "starting storm grok interface at http://{:?}",
+        "starting storm grok UI at http://{:?}",
         listener.local_addr().unwrap()
     );
 
@@ -142,7 +142,7 @@ async fn main() {
         .layer(Extension(traffic_log));
 
     let http_serve = axum::Server::from_tcp(listener)
-        .expect("Could not create server from TcpListener")
+        .expect("Could not start server from TcpListener")
         .serve(app.into_make_service());
 
     tokio::select!(

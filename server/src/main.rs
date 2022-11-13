@@ -62,7 +62,7 @@ async fn forwarder(
 async fn handler(Extension(client_map): Extension<ClientMap>, host: Host) -> &'static str {
     println!("{:?}", host);
     println!("{:?}", client_map);
-    "🚀Safesixx is het gaafst!!🚀\n"
+    "🚀Safesixx is het gaafst!!!🚀\n"
 }
 
 fn resolve_uuid_from_host(host: &str) -> Option<Uuid> {

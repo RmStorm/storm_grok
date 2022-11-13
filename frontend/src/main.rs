@@ -20,7 +20,7 @@ fn App<G: Html>(cx: Scope) -> View<G> {
                 "!"
             }
 
-            input(placeholder="What is your name?", bind:value=name)
+            input(placeholder="What is your name??", bind:value=name)
         }
     }
 }

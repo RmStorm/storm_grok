@@ -1,21 +1,15 @@
-# storm_grok_server
-Homegrown ngrok clone, written in rust! (server)
-
-The client is over at https://github.com/RmStorm/storm_grok
-
 ## Development
 
-Simply run `cargo run` and you're off to the races! In dev mode self signed certificates for localhost are used.
+Run `cargo run --bin sg_server` in the root of the repo and you're off to the races! In dev mode self signed certificates for localhost are used.
 
 ## Deployment
 
 This project is meant for you to run your own fully certified copy of stormgrok :tm:. It's sligthly more involved then just running locally. You will need some server out on the internet and you will need to get certificates. But that is really it! What follows is a write up of how I currently have this running at `*.stormgrok.nl`.
 
-First build a binary using `cargo build --release`. Then copy the binary and the config directory to your favourite server. I've been using a small Dutch web provider for domain names called [transip](https://www.transip.nl) for a long time. [Certbot](https://certbot.eff.org/) did not support that provider well so I'm using [Lego](https://go-acme.github.io/lego/) instead to get my certs.
+First build a binary using `cargo build --release --bin sg_server` or `make`. Then copy the binary and the config directory to your favourite server. 
 
 ### certs
-
-Lego is quite nice! You need to run this command by hand once in the root directory of `my-user` at `/home/my-user`. See their list of supported dns providers [here](https://go-acme.github.io/lego/dns/), it's quite extensive! 
+I've been using a small Dutch web provider for domain names called [transip](https://www.transip.nl) for a long time. [Certbot](https://certbot.eff.org/) did not support that provider well so I'm using [Lego](https://go-acme.github.io/lego/) instead to get my certs. Lego is quite nice! You need to run this command by hand once in the root directory of `my-user` at `/home/my-user`. See their list of supported dns providers [here](https://go-acme.github.io/lego/dns/), it's quite extensive! 
 
 ```bash
 TRANSIP_ACCOUNT_NAME="my-transip-user" TRANSIP_PRIVATE_KEY_PATH="/path/to/my/key" lego -m "myemail@gmail.com" --dns transip -d *.stormgrok.nl -d stormgrok.nl run
@@ -63,7 +57,7 @@ Starting it can be done like so:
 
 ```bash
 cd sg_server
-sudo SG_SERVER__TLS__CERT_FILE=/home/my-user/.lego/certificates/_.stormgrok.nl.crt SG_SERVER__TLS__KEY_FILE=/home/my-user/.lego/certificates/_.stormgrok.nl.key RUN_ENV=Prod ./sg_server
+sudo SG__SERVER__TLS__CERT_FILE=/home/my-user/.lego/certificates/_.stormgrok.nl.crt SG__SERVER__TLS__KEY_FILE=/home/my-user/.lego/certificates/_.stormgrok.nl.key RUN_ENV=Prod ./sg_server
 ```
 
 ### Systemd
@@ -81,8 +75,8 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-Environment="SG_SERVER__TLS__CERT_FILE=/home/my-user/.lego/certificates/_.stormgrok.nl.crt"
-Environment="SG_SERVER__TLS__KEY_FILE=/home/my-user/.lego/certificates/_.stormgrok.nl.key"
+Environment="SG__SERVER__TLS__CERT_FILE=/home/my-user/.lego/certificates/_.stormgrok.nl.crt"
+Environment="SG__SERVER__TLS__KEY_FILE=/home/my-user/.lego/certificates/_.stormgrok.nl.key"
 Environment="RUN_ENV=Prod"
 User=root
 WorkingDirectory=/home/my-user/sg_server
