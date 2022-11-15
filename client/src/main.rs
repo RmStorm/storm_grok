@@ -13,8 +13,8 @@ use tracing_subscriber::{filter::LevelFilter, fmt, EnvFilter};
 static DS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../dist");
 
 mod client;
-mod copy_writer;
 mod dev_stuff;
+mod eaves_socket;
 
 use clap::Parser;
 use clap::ValueEnum;
@@ -68,8 +68,8 @@ async fn hello() -> &'static str {
 }
 
 async fn get_traffic_log(
-    Extension(traffic_log): Extension<Arc<RwLock<copy_writer::TrafficLog>>>,
-) -> Json<copy_writer::TrafficLog> {
+    Extension(traffic_log): Extension<Arc<RwLock<eaves_socket::TrafficLog>>>,
+) -> Json<eaves_socket::TrafficLog> {
     Json(traffic_log.read().clone())
 }
 
@@ -120,8 +120,8 @@ async fn main() {
         .event_format(fmt::format().pretty())
         .init();
 
-    let traffic_log: Arc<RwLock<copy_writer::TrafficLog>> =
-        Arc::new(RwLock::new(copy_writer::TrafficLog {
+    let traffic_log: Arc<RwLock<eaves_socket::TrafficLog>> =
+        Arc::new(RwLock::new(eaves_socket::TrafficLog {
             logged_conns: Vec::new(),
         }));
     let sg_client = client::start_client(cli, traffic_log.clone());

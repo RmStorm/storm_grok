@@ -31,7 +31,6 @@ type ClientMap = Arc<RwLock<HashMap<Uuid, String>>>;
 type HttpClient = hyper::client::Client<HttpConnector, Body>;
 type HttpsClient = hyper::client::Client<HttpsConnector<HttpConnector>, Body>;
 
-#[tracing::instrument]
 async fn forwarder(
     Extension(client): Extension<HttpClient>,
     Extension(client_map): Extension<ClientMap>,

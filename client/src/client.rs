@@ -11,7 +11,7 @@ use tokio::net::TcpStream;
 use quinn::{Endpoint, IncomingBiStreams, IncomingUniStreams, RecvStream, SendStream};
 
 use crate::{
-    copy_writer::{create_logged_writers, TrafficLog},
+    eaves_socket::{EavesSocket, TrafficLog, LoggedConnection},
     dev_stuff, Cli, Mode,
 };
 
@@ -152,28 +152,28 @@ async fn handle_client_conn(
     port: u16,
     traffic_log: Arc<RwLock<TrafficLog>>,
 ) {
-    let (mut client_send, mut client_recv) = client_connection;
+    let (mut client_send, client_recv) = client_connection;
     match TcpStream::connect(("127.0.0.1", port)).await {
         Ok(mut server_stream) => {
             info!("Succesfully connected client");
-            let (mut server_recv, server_send) = server_stream.split();
-            /*
-            Ah crap, I thought I was really clever with storing all the data that has traveled over
-            a connection but.... It doesn't work well for http forwarding mode.. The http client in
-            the stormgrokserver that takes care of proxying the traffic over here does connection
-            pooling for all incoming connections to it.. It can still choose to make several
-            connections under highly concurrent loads though!! But fundamentally it will pool so
-            watching the bytes on a single connection is not all that usefull in http mode..
-
-            Keeping track of the seperate connections does work well with tcp forwarding though!
-            */
-            let (mut client_send, mut server_send) =
-                create_logged_writers(client_send, server_send, traffic_log.clone());
-            tokio::select! {
-                _ = tokio::io::copy(&mut server_recv, &mut client_send) => {info!("Server hit EOF")}
-                _ = tokio::io::copy(&mut client_recv, &mut server_send) => {}
+            let lc = LoggedConnection {
+                traffic_in: vec![],
+                traffic_out: vec![],
             };
-            info!("Disconnected client");
+            let conn_index = traffic_log.read().logged_conns.len();
+            traffic_log.write().logged_conns.push(lc);
+
+            let mut es = EavesSocket {
+                reader: Box::pin(client_recv),
+                writer: Box::pin(client_send),
+                traffic_log: traffic_log.clone(),
+                conn_index: conn_index,
+            };
+            match tokio::io::copy_bidirectional(&mut es, &mut server_stream).await {
+                Ok(res) => info!("success {:?}", res),
+                Err(e) => info!("failure {:?}", e),
+            }
+            info!("Disconnected client!");
             info!("Full traffic log: {:?}", traffic_log.read());
         }
         Err(e) => {
