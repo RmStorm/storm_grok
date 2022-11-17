@@ -6,7 +6,6 @@ use std::pin::Pin;
 use tokio::io::{AsyncWrite, AsyncRead};
 
 use std::{sync::Arc};
-use tracing::log::{info};
 use parking_lot::RwLock;
 
 #[derive(Debug, Serialize, Clone)]
@@ -52,14 +51,13 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncWrite for EavesSocket<R, 
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
         {
-            info!("we ever here?");
             let ob = ObservedBytes {
                 timestamp: Utc::now(),
                 bytes: String::from_utf8_lossy(buf).to_string(),
             };
 
             let logged_conn = &mut self.traffic_log.write().logged_conns[self.conn_index];
-            logged_conn.traffic_in.push(ob);
+            logged_conn.traffic_out.push(ob);
         }
         self.writer.as_mut().poll_write(cx, buf)
     }
@@ -85,15 +83,13 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> AsyncRead for EavesSocket<R, W
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        {
-            info!("we hereread :{:?}", buf);
-            let ob = ObservedBytes {
-                timestamp: Utc::now(),
-                bytes: String::from_utf8_lossy(buf.filled()).to_string(),
-            };
-            let logged_conn = &mut self.traffic_log.write().logged_conns[self.conn_index];
-            logged_conn.traffic_out.push(ob);
-        }
-        self.reader.as_mut().poll_read(cx, buf)
+        let poll_result = self.reader.as_mut().poll_read(cx, buf);
+        let ob = ObservedBytes {
+            timestamp: Utc::now(),
+            bytes: String::from_utf8_lossy(buf.filled()).to_string(),
+        };
+        let logged_conn = &mut self.traffic_log.write().logged_conns[self.conn_index];
+        logged_conn.traffic_in.push(ob);
+        poll_result
     }
 }

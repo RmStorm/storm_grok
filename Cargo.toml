@@ -2,14 +2,10 @@
 members = ["server", "client", "frontend", "tests"]
 
 # release profile tips from: https://github.com/johnthagen/min-sized-rust
+# and: https://fasterthanli.me/articles/why-is-my-rust-build-so-slow
 [profile.release-small]
 inherits = "release"
 strip = true
 lto = true
 panic = "abort"
 opt-level = "s"
-
-# and: https://fasterthanli.me/articles/why-is-my-rust-build-so-slow
-[profile.dev]
-lto = true
-debug = 1

@@ -45,6 +45,7 @@ async fn handle_conns_loop(
     auth: settings::AuthRules,
 ) {
     // Todo: I guess this vector will grow very long now.. Need something to prune the done tasks off.
+    // Same situation applies to client by the way!!
     let mut handles = Vec::new();
     while let Some(conn) = incoming.next().await {
         let ses = session::start_session(conn, client_map.clone(), key_map.clone(), auth.clone());
