@@ -3,20 +3,52 @@ use chrono::serde::ts_milliseconds;
 use serde::Serialize;
 use std::fmt;
 use std::pin::Pin;
-use tokio::io::{AsyncWrite, AsyncRead};
+use tokio::io::{AsyncRead, AsyncWrite};
 
-use std::{sync::Arc};
 use parking_lot::RwLock;
+use std::sync::Arc;
 
-#[derive(Debug, Serialize, Clone)]
+use base64_serde::{base64_serde_type};
+use base64::{STANDARD};
+base64_serde_type!(Base64Standard, STANDARD);
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TrafficLog {
+    pub requests: Vec<RequestCycle>,
     pub logged_conns: Vec<LoggedConnection>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LoggedConnection {
     pub traffic_in: Vec<ObservedBytes>,
     pub traffic_out: Vec<ObservedBytes>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SerializableRequest {
+    pub method: String,
+    pub uri: String,
+    pub headers: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SerializableResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestCycle {
+    #[serde(with = "ts_milliseconds")]
+    pub timestamp_in: DateTime<Utc>,
+    pub head_in: SerializableRequest,
+    #[serde(with = "Base64Standard")]
+    pub body_in: Vec<u8>,
+    #[serde(with = "ts_milliseconds")]
+    pub timestamp_out: DateTime<Utc>,
+    pub head_out: SerializableResponse,
+    #[serde(with = "Base64Standard")]
+    pub body_out: Vec<u8>,
 }
 
 #[derive(Serialize, Clone)]

@@ -1,6 +1,5 @@
 use config::{Config, Environment, File};
 use rustls::{Certificate, PrivateKey};
-use rustls_pemfile;
 
 use serde::Deserialize;
 use std::{fs, io::BufReader, path::PathBuf};
@@ -34,7 +33,7 @@ pub struct AuthRules {
     pub host_domains: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub enum ENV {
     Dev,
     Prod,

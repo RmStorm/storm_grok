@@ -65,9 +65,8 @@ async fn handler(Extension(client_map): Extension<ClientMap>, host: Host) -> &'s
 }
 
 fn resolve_uuid_from_host(host: &str) -> Option<Uuid> {
-    let client_id = host.split(".").next()?;
-    let id = Uuid::parse_str(client_id).ok();
-    id
+    let client_id = host.split('.').next()?;
+    Uuid::parse_str(client_id).ok()
 }
 
 #[tokio::main]
@@ -94,7 +93,7 @@ async fn main() {
             "/*path",
             any(|Host(hostname): Host, request: Request<Body>| async move {
                 match resolve_uuid_from_host(hostname.as_str()) {
-                    Some(_uuid) => forwarder_router.oneshot(request).await,
+                    Some(_) => forwarder_router.oneshot(request).await,
                     None => default_router.oneshot(request).await,
                 }
             }),

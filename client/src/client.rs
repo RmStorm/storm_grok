@@ -1,3 +1,4 @@
+use color_eyre::eyre::Result;
 use futures::StreamExt;
 use rustls::{ClientConfig, KeyLogFile};
 use std::{env, io::ErrorKind, net::SocketAddr, sync::Arc};
@@ -11,8 +12,9 @@ use tokio::net::TcpStream;
 use quinn::{Endpoint, IncomingBiStreams, IncomingUniStreams, RecvStream, SendStream};
 
 use crate::{
-    eaves_socket::{EavesSocket, TrafficLog, LoggedConnection},
-    dev_stuff, Cli, Mode,
+    dev_stuff,
+    eaves_socket::{EavesSocket, LoggedConnection, TrafficLog},
+    Cli, Mode,
 };
 
 fn setup_quic_on_available_port(host: &str) -> Endpoint {
@@ -36,22 +38,18 @@ fn setup_quic_on_available_port(host: &str) -> Endpoint {
     panic!("No ports available")
 }
 
-pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
-    let mut endpoint;
-    let http_server_port: String;
-    let quic_server_port: String = env::var("SG__SERVER__QUIC_PORT").unwrap_or("5000".into());
-
-    let new_connection = if cli.dev {
-        endpoint = setup_quic_on_available_port("127.0.0.1");
+async fn start_quic_conn(endpoint: &mut Endpoint, dev_mode: bool) -> Result<quinn::Connecting> {
+    let quic_server_port: String =
+        env::var("SG__SERVER__QUIC_PORT").unwrap_or_else(|_| "5000".into());
+    if dev_mode {
         endpoint.set_default_client_config(dev_stuff::configure_insecure_client());
         let socket_addr = format!("127.0.0.1:{}", quic_server_port);
         info!(
             "quic endpoint at {:?} configured for local, insecure connections only",
             socket_addr
         );
-        endpoint.connect(socket_addr.parse::<SocketAddr>().unwrap(), "localhost")
+        Ok(endpoint.connect(socket_addr.parse::<SocketAddr>()?, "localhost")?)
     } else {
-        endpoint = setup_quic_on_available_port("0.0.0.0");
         let mut root_store = rustls::RootCertStore::empty();
         root_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
             rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
@@ -74,11 +72,12 @@ pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
             "quic endpoint at {:?} onfigured for secure connections",
             socket_addr
         );
-        endpoint.connect(socket_addr.parse::<SocketAddr>().unwrap(), "stormgrok.nl")
-    };
-    let new_connection = new_connection.unwrap().await.unwrap();
+        Ok(endpoint.connect(socket_addr.parse::<SocketAddr>()?, "stormgrok.nl")?)
+    }
+}
 
-    let (mut send, recv) = new_connection.connection.open_bi().await.unwrap();
+async fn sgrok_handshake(conn: quinn::Connection, mode: Mode) -> Vec<u8> {
+    let (mut send, recv) = conn.open_bi().await.unwrap();
 
     let token: String = match env::var("SGROK_TOKEN") {
         Ok(token) => token,
@@ -87,14 +86,27 @@ pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
             "".to_string()
         }
     };
-    send.write_all(&<[u8; 1]>::from(cli.mode)).await.unwrap();
+    send.write_all(&<[u8; 1]>::from(mode)).await.unwrap();
     send.write_all(token.as_bytes()).await.unwrap();
     send.finish().await.unwrap();
 
-    let response_bytes = recv
-        .read_to_end(16)
+    recv.read_to_end(16)
         .await
-        .expect("The server did not give us a UUID!");
+        .expect("The server did not give us a UUID!")
+}
+
+pub async fn start_client(forward_port: u16, cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
+    let mut endpoint = if cli.dev {
+        setup_quic_on_available_port("127.0.0.1")
+    } else {
+        setup_quic_on_available_port("0.0.0.0")
+    };
+    let new_connection = start_quic_conn(&mut endpoint, cli.dev)
+        .await
+        .unwrap()
+        .await
+        .unwrap();
+    let response_bytes = sgrok_handshake(new_connection.connection, cli.mode).await;
 
     info!("Exposing localhost:{:?} on the internet!", cli.port);
     match cli.mode {
@@ -106,7 +118,8 @@ pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
             }
         }
         Mode::Http => {
-            http_server_port = env::var("SG__SERVER__HTTP_PORT").unwrap_or("3000".into());
+            let http_server_port =
+                env::var("SG__SERVER__HTTP_PORT").unwrap_or_else(|_| "3000".into());
             let uuid = Uuid::from_bytes(response_bytes.try_into().unwrap());
             match cli.dev {
                 true => info!("curl http://{:?}.localhost:{}", uuid, http_server_port),
@@ -116,7 +129,7 @@ pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
     }
     tokio::select!(
         _ = handle_uni_conns_loop(new_connection.uni_streams) => {},
-        _ = handle_bi_conns_loop(new_connection.bi_streams, cli.port, traffic_log) => {},
+        _ = handle_bi_conns_loop(new_connection.bi_streams, forward_port, traffic_log) => {},
     );
     endpoint.wait_idle().await;
 }
@@ -124,11 +137,11 @@ pub async fn start_client(cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
 async fn handle_uni_conns_loop(mut uni_streams: IncomingUniStreams) {
     while let Some(stream) = uni_streams.next().await {
         let recv = stream.unwrap();
-        let buffed_data = recv.read_to_end(100).await.unwrap();
-        if buffed_data != b"ping".to_vec() {
+        let buffered_data = recv.read_to_end(100).await.unwrap();
+        if buffered_data != b"ping".to_vec() {
             info!(
                 "received from server: {:?}",
-                String::from_utf8_lossy(&buffed_data)
+                String::from_utf8_lossy(&buffered_data)
             );
         }
     }
@@ -143,6 +156,7 @@ async fn handle_bi_conns_loop(
         info!("Incoming bi stream");
         let traffic_log = traffic_log.clone();
         let stream = stream.unwrap();
+        // Should I keep track of these spawned childtasks?
         tokio::spawn(async move { handle_client_conn(stream, port, traffic_log).await });
     }
 }
@@ -167,7 +181,7 @@ async fn handle_client_conn(
                 reader: Box::pin(client_recv),
                 writer: Box::pin(client_send),
                 traffic_log: traffic_log.clone(),
-                conn_index: conn_index,
+                conn_index,
             };
             match tokio::io::copy_bidirectional(&mut es, &mut server_stream).await {
                 Ok(res) => info!("success {:?}", res),

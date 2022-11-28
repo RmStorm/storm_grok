@@ -3,7 +3,8 @@ Homegrown ngrok clone, written in rust!
 
 ## Architecture
 
-The client contains a small bundled frontend so there are thre components in this repo, server, client and frontend.
+The client contains a small bundled frontend so there are three components in this repo, server, client and frontend. The frontend is bundled in the client by using a crate called [include_dir](https://docs.rs/include_dir/latest/include_dir/). The architecture diagram here tries to explain the flow of traffic when running sgrok in http or tcp mode.
+![](sgrok.png)
 
 ## Development
 
@@ -21,6 +22,6 @@ cargo run --bin sg_server
 cargo run --bin storm_grok http 4040 [-d]
 ```
 
-The optional `-d` flag on the client is for running in development mode. Without this flag the client will try to connect to `stormgrok.nl` at `157.90.124.255`. These are hardcoded for now. With the `-d` flag set it will instead try to connect to `localhost` at `127.0.0.1`.
+The optional `-d` flag on the client is for running in development mode. Without this flag the client will try to connect to `stormgrok.nl` at `157.90.124.255`. These values are hardcoded for now. With the `-d` flag set it will instead try to connect to `localhost` at `127.0.0.1`.
 
-For building releases run `make` this will create a release for the server called `sg_server` and one for the client called `storm_grok` in the directory: `target/release`.
+For building releases run `make`, this will create a release for the server called `sg_server` and one for the client called `storm_grok` in the directory: `target/release`.

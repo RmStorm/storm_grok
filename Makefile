@@ -1,8 +1,8 @@
 .PHONY : executables
 executables : target/release/storm_grok target/release/sg_server
 
-dist/index.html : frontend/src/*
-	cd frontend && trunk build --release
+dist/index.html : frontend/*
+	export RUSTFLAGS="" && cd frontend && trunk build --release
 
 target/release/storm_grok : client/src/* dist/index.html
 	cargo build --profile release-small --bin storm_grok

@@ -160,7 +160,7 @@ async fn do_handshake(
         let token = String::from_utf8_lossy(&received_bytes[1..]);
         let kid = decode_header(&token)?
             .kid
-            .ok_or(anyhow!("No kid found in token header"))?;
+            .ok_or_else(|| anyhow!("No kid found in token header"))?;
 
         let token_message = match key_map.read().get(&kid) {
             Some(dec_key) => decode::<Claims>(&token, dec_key, &Validation::new(Algorithm::RS256))?,

@@ -65,7 +65,7 @@ async fn refresh_token(
     let re = Regex::new(r"max-age=(\d*),")?;
     let cap = re
         .captures(cc.to_str()?)
-        .ok_or(anyhow!("Could not find max age in cache control header"))?;
+        .ok_or_else(|| anyhow!("Could not find max age in cache control header"))?;
     let max_age = cap[1].parse::<u64>()?;
 
     let keys: HashMap<String, DecodingKey> = kd

@@ -54,7 +54,7 @@ impl Drop for ChildWrapper {
         if let Some(mut stdout) = self.inner.stdout.take() {
             let mut buffer = Vec::new();
             stdout.read_to_end(&mut buffer).unwrap();
-            if buffer.len() != 0 {
+            if !buffer.is_empty() {
                 println!("Printing stdout for {:?}:", self.name);
                 println!("{}", std::str::from_utf8(&buffer).unwrap());
             }
@@ -63,7 +63,7 @@ impl Drop for ChildWrapper {
         if let Some(mut stderr) = self.inner.stderr.take() {
             let mut buffer = Vec::new();
             stderr.read_to_end(&mut buffer).unwrap();
-            if buffer.len() != 0 {
+            if !buffer.is_empty() {
                 println!("Printing stderr for {:?}:", self.name);
                 println!("{}", std::str::from_utf8(&buffer).unwrap());
             }
@@ -74,7 +74,7 @@ impl ChildWrapper {
     fn new(cmd: &'static str, args: &[&str], envs: HashMap<&str, &str>) -> ChildWrapper {
         ChildWrapper {
             name: cmd,
-            inner: get_test_bin(&cmd)
+            inner: get_test_bin(cmd)
                 .envs(envs)
                 .args(args)
                 .stdin(std::process::Stdio::null())
