@@ -42,15 +42,15 @@ Now that you have certificates you can start stormgrok. I have placed both the b
 
 ```
 /home/my-user
-└───sg_server
-│   │   sg_server
-│   └───config
-│       │   Default.toml
-│       │   Prod.toml
-└───.lego
-    └───certificates
-        │   _.stormgrok.nl.crt
-        │   _.stormgrok.nl.key
+├── sg_server
+│  ├── sg_server
+│  └── config
+│     ├── Dev.toml
+│     └── Prod.toml
+└── .lego
+   └── certificates
+      ├── _.stormgrok.nl.crt
+      └── _.stormgrok.nl.key
 ```
 
 Starting it can be done like so:

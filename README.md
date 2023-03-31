@@ -11,8 +11,11 @@ The client contains a small bundled frontend so there are three components in th
 Before the storm_grok client can run you need to build the frontend. It's a small wasm app made using sycamore.
 
 ``` bash
+cargo install trunk
+rustup target add wasm32-unknown-unknown
+
 cd frontend
-trunk build [--release]
+RUSTFLAGS="" trunk build [--release]
 ```
 
 This preps 3 files in a directory called 'dist' which are used when running the client, running the server and client is done from the root of the repo like so:

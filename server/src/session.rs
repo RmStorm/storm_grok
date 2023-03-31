@@ -155,6 +155,7 @@ async fn do_handshake(
 
     let tcp_listener = start_local_tcp_server(requested_mode).await?;
     let tcp_addr = tcp_listener.local_addr()?;
+    let mut id = Uuid::new_v4();
 
     if auth.enabled {
         let token = String::from_utf8_lossy(&received_bytes[1..]);
@@ -164,16 +165,19 @@ async fn do_handshake(
 
         let token_message = match key_map.read().get(&kid) {
             Some(dec_key) => decode::<Claims>(&token, dec_key, &Validation::new(Algorithm::RS256))?,
-            None => bail!("Google did not supply a DecodingKey for 'kid={kid}'"), // todo: try fetching new keys before bailing
+            None => bail!("No valid DecodingKey found for 'kid={kid}'"), // todo: try fetching new keys before bailing
         };
 
-        if let Err(e) = validate_claims(token_message.claims, auth).await {
-            send.reset(1u32.into())?;
-            return Err(e);
+        match validate_claims(token_message.claims, auth).await {
+            Err(e) => {
+                send.reset(1u32.into())?;
+                return Err(e);
+            }
+            Ok(Some(exact_id)) => id = Uuid::parse_str(&exact_id).unwrap(),
+            _ => (),
         }
     }
 
-    let id = Uuid::new_v4();
     info!("Succesfully connected new quic client with {id:?}");
     match requested_mode {
         Mode::Tcp => send.write_all(&tcp_addr.port().to_be_bytes()).await?,
@@ -187,17 +191,27 @@ async fn do_handshake(
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
     hd: Option<String>,
-    email: String,
-    email_verified: bool,
+    email: Option<String>,
+    email_verified: Option<bool>,
+    sub: Option<String>,
+    iss: Option<String>,
 }
 
-async fn validate_claims(claims: Claims, auth: &settings::AuthRules) -> Result<()> {
-    if claims.email_verified && auth.users.contains(&claims.email) {
-        return Ok(());
+async fn validate_claims(claims: Claims, auth: &settings::AuthRules) -> Result<Option<String>> {
+    if let (Some(true), Some(email)) = (claims.email_verified, claims.email) {
+        if auth.users.contains(&email) {
+            return Ok(None);
+        }
     }
+    if let (Some(iss), Some(sub)) = (claims.iss, claims.sub) {
+        if iss == "https://cognito-idp.eu-north-1.amazonaws.com/eu-north-1_47xU4ImMe" {
+            return Ok(Some(sub));
+        }
+    }
+
     if let Some(host_domain) = claims.hd {
         if auth.host_domains.contains(&host_domain) {
-            return Ok(());
+            return Ok(None);
         }
     }
     bail!("This token is not authorized!");

@@ -21,7 +21,7 @@ use axum::{
 };
 use axum_server::tls_rustls::RustlsConfig;
 
-mod google_key_store;
+mod jwt_key_store;
 mod server;
 mod session;
 mod settings;
@@ -128,7 +128,7 @@ async fn main() {
         tokio::select!(
             _ = http_serve => {},
             _ = sg_server => {},
-            _ = google_key_store::refresh_loop(key_store, https_client) => {},
+            _ = jwt_key_store::refresh_loop(key_store, https_client) => {},
         );
     } else {
         let http_serve =
@@ -136,7 +136,7 @@ async fn main() {
         tokio::select!(
             _ = http_serve => {},
             _ = sg_server => {},
-            _ = google_key_store::refresh_loop(key_store, https_client) => {},
+            _ = jwt_key_store::refresh_loop(key_store, https_client) => {},
         );
     };
 }
