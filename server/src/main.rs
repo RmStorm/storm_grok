@@ -123,8 +123,8 @@ async fn main() {
         let http_serve = axum_server::bind_rustls(addr, tls_config)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>());
         tokio::select!(
-            _ = http_serve => {},
-            _ = sg_server => {},
+            res = http_serve => {info!("http_serve completed first with {:?}", res)},
+            res = sg_server => {info!("sg_server completed first with {:?}", res)},
             _ = jwt_key_store::refresh_loop(&config.auth.jwt_key_endpoints, key_store, https_client) => {},
         );
     } else {

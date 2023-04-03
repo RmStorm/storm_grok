@@ -1,6 +1,6 @@
 [server]
-http_port = "443"
-http_host = "[::]"
+http_port = "8443"  # The http server is behind nginx
+http_host = "[::1]"
 quic_host = "0.0.0.0"
 
 [log]
