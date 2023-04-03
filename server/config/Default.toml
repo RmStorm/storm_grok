@@ -2,5 +2,7 @@
 quic_port = "5000"
 
 [auth]
-users = ["roaldstorm@gmail.com"]
-host_domains = ["oda.com"]
+jwt_key_endpoints = ["https://www.googleapis.com/oauth2/v3/certs", "https://cognito-idp.eu-north-1.amazonaws.com/eu-north-1_47xU4ImMe/.well-known/jwks.json"]
+users = []
+host_domains = []
+default_allow_issuers = ["https://cognito-idp.eu-north-1.amazonaws.com/eu-north-1_47xU4ImMe"]

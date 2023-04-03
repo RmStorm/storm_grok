@@ -1,6 +1,4 @@
 use anyhow::Result;
-use futures::StreamExt;
-use quinn::Incoming;
 use quinn::{Endpoint, ServerConfig};
 use std::net::SocketAddr;
 use tokio::task::JoinHandle;
@@ -31,15 +29,15 @@ pub async fn start_storm_grok_server(
     let server_config = ServerConfig::with_single_cert(certs, key).expect("bad certificate/key");
 
     info!("Starting Quic server on {:?}", server_address);
-    let (endpoint, incoming) = Endpoint::server(server_config, server_address)?;
-    handle_conns_loop(incoming, client_map, key_map, config.auth.clone()).await;
+    let endpoint = Endpoint::server(server_config, server_address)?;
+    handle_conns_loop(endpoint.clone(), client_map, key_map, config.auth.clone()).await;
     info!("Waiting for clean quic server shutdown");
     endpoint.wait_idle().await;
     Ok(())
 }
 
 async fn handle_conns_loop(
-    mut incoming: Incoming,
+    endpoint: Endpoint,
     client_map: ClientMap,
     key_map: KeyMap,
     auth: settings::AuthRules,
@@ -47,7 +45,7 @@ async fn handle_conns_loop(
     // Todo: I guess this vector will grow very long now.. Need something to prune the done tasks off.
     // Same situation applies to client by the way!!
     let mut handles = Vec::new();
-    while let Some(conn) = incoming.next().await {
+    while let Some(conn) = endpoint.accept().await {
         let ses = session::start_session(conn, client_map.clone(), key_map.clone(), auth.clone());
         handles.push(ChildTask {
             inner: tokio::spawn(ses),

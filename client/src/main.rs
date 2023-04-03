@@ -1,4 +1,4 @@
-use crate::eaves_socket::{SerializableResponse, SerializableRequest};
+use crate::eaves_socket::{SerializableRequest, SerializableResponse};
 use chrono::Utc;
 use include_dir::{include_dir, Dir};
 
@@ -33,7 +33,7 @@ type HttpClient = hyper::client::Client<HttpConnector, Body>;
 #[clap(author, version, about, long_about = None)]
 pub struct Cli {
     /// What mode to run the program in
-    #[clap(arg_enum, value_parser)]
+    #[clap(value_enum, value_parser)]
     mode: Mode,
     /// Port to forward to
     #[clap(value_parser = clap::value_parser!(u16).range(1..65536))]
@@ -126,9 +126,16 @@ async fn proxy(
     let (in_head, in_body) = req.into_parts();
     let sreq = SerializableRequest {
         method: in_head.method.as_str().to_string(),
-        uri: uri,
-        headers: in_head.headers.iter()
-            .map(|(k, v)| (k.as_str().to_owned(), String::from_utf8_lossy(v.as_bytes()).to_string()))
+        uri,
+        headers: in_head
+            .headers
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.as_str().to_owned(),
+                    String::from_utf8_lossy(v.as_bytes()).to_string(),
+                )
+            })
             .collect::<Vec<_>>(),
     };
     let in_body_bytes = hyper::body::to_bytes(in_body).await.unwrap();
@@ -139,8 +146,15 @@ async fn proxy(
     let (mut out_head, out_body) = response.into_parts();
     let sresp = SerializableResponse {
         status: out_head.status.as_u16(),
-        headers: out_head.headers.iter()
-            .map(|(k, v)| (k.as_str().to_owned(), String::from_utf8_lossy(v.as_bytes()).to_string()))
+        headers: out_head
+            .headers
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.as_str().to_owned(),
+                    String::from_utf8_lossy(v.as_bytes()).to_string(),
+                )
+            })
             .collect::<Vec<_>>(),
     };
     let out_body_bytes = hyper::body::to_bytes(out_body).await.unwrap();
@@ -150,14 +164,17 @@ async fn proxy(
         .headers
         .remove(hyper::http::header::TRANSFER_ENCODING);
     let response = Response::from_parts(out_head, out_body_bytes.into());
-    traffic_log.write().requests.push(eaves_socket::RequestCycle {
-        timestamp_in,
-        head_in: sreq,
-        body_in,
-        timestamp_out: Utc::now(),
-        head_out: sresp,
-        body_out,
-    });
+    traffic_log
+        .write()
+        .requests
+        .push(eaves_socket::RequestCycle {
+            timestamp_in,
+            head_in: sreq,
+            body_in,
+            timestamp_out: Utc::now(),
+            head_out: sresp,
+            body_out,
+        });
     response
 }
 
@@ -181,7 +198,7 @@ async fn main() {
     fmt()
         .with_env_filter(
             EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
+                .with_default_directive(LevelFilter::DEBUG.into())
                 .from_env_lossy(),
         )
         .event_format(fmt::format().pretty())
@@ -213,8 +230,11 @@ async fn main() {
         .serve(app.into_make_service());
     if mode == Mode::Http {
         let proxy_addr = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let sg_client =
-            client::start_client(proxy_addr.local_addr().unwrap().port(), cli, traffic_log.clone());
+        let sg_client = client::start_client(
+            proxy_addr.local_addr().unwrap().port(),
+            cli,
+            traffic_log.clone(),
+        );
 
         info!("Starting proxy at {:?}", &proxy_addr);
         let proxy_app = Router::new()

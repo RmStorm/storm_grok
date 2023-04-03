@@ -1,8 +1,7 @@
-use futures_util::stream::StreamExt;
-use quinn::{Connecting, Connection, NewConnection};
+use quinn::{Connecting, Connection};
 use tokio::net::TcpListener;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use jsonwebtoken::{decode, decode_header, Algorithm, Validation};
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
@@ -53,10 +52,10 @@ impl Drop for RegisteredListener {
     }
 }
 
-async fn connect_tcp_to_bi_quic(listener: RegisteredListener, connection: Connection) {
+async fn connect_tcp_to_bi_quic(listener: RegisteredListener, conn: Connection) {
     while let Ok((mut client, addr)) = listener.tcp_listener.accept().await {
         debug!("Created tcp listen port on {:?}", addr);
-        let (mut server_send, mut server_recv) = match connection.clone().open_bi().await {
+        let (mut server_send, mut server_recv) = match conn.open_bi().await {
             Ok(res) => res,
             Err(e) => {
                 error!("Could not establish bi quic conn for forwarding: {e:?}");
@@ -109,46 +108,44 @@ pub async fn start_session(
     auth: settings::AuthRules,
 ) {
     info!("Establishing incoming connection");
-    let mut conn: NewConnection = match conn.await {
+    let mut conn: Connection = match conn.await {
         Ok(conn) => conn,
         Err(e) => {
             error!("Encountered error while starting quicc conn {e:?}");
             return;
         }
     };
-    let (id, tcp_listener) = match do_handshake(&mut conn, key_map, &auth).await {
+    let listener = match connect_client(&mut conn, key_map, client_map, &auth).await {
         Ok(res) => res,
         Err(e) => {
-            error!("Encountered '{:?}' while handshaking client", e);
-            conn.connection.close(1u32.into(), e.to_string().as_bytes());
+            error!("Encountered '{:#}' while handshaking client", e);
+            conn.close(1u32.into(), format!("{:#}", e).as_bytes());
             return;
         }
     };
-
-    let tcp_addr = tcp_listener.local_addr().unwrap();
-    debug!(
-        "Setting up client session with tcp listener on {:?}",
-        tcp_addr
-    );
-    client_map.write().insert(id, tcp_addr.to_string());
-    let listener = RegisteredListener {
-        tcp_listener,
-        client_map,
-        id,
-    };
     tokio::select!(
-        _ = connect_tcp_to_bi_quic(listener, conn.connection.clone()) => {},
-        _ = send_ping(conn.connection) => {},
+        _ = connect_tcp_to_bi_quic(listener, conn.clone()) => {},
+        _ = send_ping(conn) => {},
     );
 }
 
-async fn do_handshake(
-    new_conn: &mut NewConnection,
+/// Connects a client
+///
+/// The basic contract is that a client connects to this server and immediately
+/// opens a single bidirectional connection. This server accepts that connection
+/// and the client sends a token over the connection. The token is validated
+/// here according to the rules set in the 'auth' block in config.
+///
+/// If the token is succesfully validated this server sends an address back to
+/// the client and after that the client should start listening for bidirectional
+/// connections.
+async fn connect_client(
+    conn: &mut Connection,
     key_map: KeyMap,
+    client_map: ClientMap,
     auth: &settings::AuthRules,
-) -> Result<(Uuid, TcpListener)> {
-    let conn_err = anyhow!("Could not establish quic connection");
-    let (mut send, recv) = new_conn.bi_streams.next().await.ok_or(conn_err)??;
+) -> Result<RegisteredListener> {
+    let (mut send, recv) = conn.accept_bi().await?;
     // Since JWT's have to fit in a header 8kb is the practical upper limit on token size
     let received_bytes = recv.read_to_end(8192).await?;
     let requested_mode = Mode::from(received_bytes[0]);
@@ -164,11 +161,12 @@ async fn do_handshake(
             .ok_or_else(|| anyhow!("No kid found in token header"))?;
 
         let token_message = match key_map.read().get(&kid) {
-            Some(dec_key) => decode::<Claims>(&token, dec_key, &Validation::new(Algorithm::RS256))?,
+            Some(dec_key) => decode::<Claims>(&token, dec_key, &Validation::new(Algorithm::RS256))
+                .context("Failed to decode token")?,
             None => bail!("No valid DecodingKey found for 'kid={kid}'"), // todo: try fetching new keys before bailing
         };
 
-        match validate_claims(token_message.claims, auth).await {
+        match validate_claims(token_message.claims, auth) {
             Err(e) => {
                 send.reset(1u32.into())?;
                 return Err(e);
@@ -177,17 +175,37 @@ async fn do_handshake(
             _ => (),
         }
     }
-
+    {
+        // This snippet ensures the uuid is available. Conflicts are normally off course 'practically impossible'
+        // but since I try to assign a static uuid corresponding to the user uuid via some code paths conflicts
+        // are actually likely! In the case of a conflict no error is thrown. Just a new uuid assigned..
+        let mut writable_client_map = client_map.write();
+        if writable_client_map.contains_key(&id) {
+            id = Uuid::new_v4();
+        }
+        writable_client_map.insert(id, String::new());
+    }
     info!("Succesfully connected new quic client with {id:?}");
     match requested_mode {
         Mode::Tcp => send.write_all(&tcp_addr.port().to_be_bytes()).await?,
         Mode::Http => send.write_all(id.as_bytes()).await?,
     }
     send.finish().await?;
-    Ok((id, tcp_listener))
+
+    let tcp_addr = tcp_listener.local_addr().unwrap();
+    debug!(
+        "Setting up client session with tcp listener on {:?}",
+        tcp_addr
+    );
+    client_map.write().insert(id, tcp_addr.to_string());
+    Ok(RegisteredListener {
+        tcp_listener,
+        client_map,
+        id,
+    })
 }
 
-// Claims is a struct that implements Deserialize
+// Claims has to implement Deserialize to work with the jwt lib.
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
     hd: Option<String>,
@@ -197,14 +215,15 @@ struct Claims {
     iss: Option<String>,
 }
 
-async fn validate_claims(claims: Claims, auth: &settings::AuthRules) -> Result<Option<String>> {
+fn validate_claims(claims: Claims, auth: &settings::AuthRules) -> Result<Option<String>> {
+    // It would be nicer to have one set of claims and one claim validator per issuer..
     if let (Some(true), Some(email)) = (claims.email_verified, claims.email) {
         if auth.users.contains(&email) {
             return Ok(None);
         }
     }
     if let (Some(iss), Some(sub)) = (claims.iss, claims.sub) {
-        if iss == "https://cognito-idp.eu-north-1.amazonaws.com/eu-north-1_47xU4ImMe" {
+        if auth.default_allow_issuers.contains(&iss) {
             return Ok(Some(sub));
         }
     }

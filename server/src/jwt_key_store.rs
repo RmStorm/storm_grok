@@ -23,9 +23,7 @@ struct KeyData {
     keys: Vec<Key>,
 }
 
-pub async fn refresh_loop(key_store: KeyMap, https_client: HttpsClient) {
-    let endpoints = vec!["https://www.googleapis.com/oauth2/v3/certs"];
-
+pub async fn refresh_loop(endpoints: &Vec<String>, key_store: KeyMap, https_client: HttpsClient) {
     let mut tasks = Vec::new();
 
     for endpoint in endpoints {
@@ -51,10 +49,14 @@ pub async fn refresh_loop_for_endpoint(
                 {
                     let mut w = key_store.write();
                     for (kid, key) in keys {
+                        // TODO: There are two bugs here.. the kid's of several issuers are mixed and old kid's are not discarded..
+                        // A good solution would be to namespace the kid's per issuer and then always overwrite but the jwt library
+                        // does not allow reading unverified data from the token, which includes the iss.. And I don't want to do it
+                        // by hand now cause I'm short on time.
                         w.insert(kid, key);
                     }
                 }
-                info!("Refreshed tokens, refreshing again in {:?}", max_age);
+                info!("next refresh in {:?} for {}", max_age, endpoint);
                 sleep(max_age).await;
             }
             Err(e) => {
@@ -73,7 +75,6 @@ async fn refresh_keys(
         .get(Uri::try_from(endpoint).unwrap())
         .await
         .context("Could not retrieve google jwt keys")?;
-    info!("{:?}", res.headers());
     let cc = res
         .headers()
         .get("cache-control")

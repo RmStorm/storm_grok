@@ -8,9 +8,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-use base64_serde::{base64_serde_type};
-use base64::{STANDARD};
-base64_serde_type!(Base64Standard, STANDARD);
+use base64_serde::base64_serde_type;
+base64_serde_type!(Base64Standard, base64::engine::general_purpose::STANDARD);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TrafficLog {

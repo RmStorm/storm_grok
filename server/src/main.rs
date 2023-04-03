@@ -59,9 +59,7 @@ async fn forwarder(
 
 #[tracing::instrument]
 async fn handler(Extension(client_map): Extension<ClientMap>, host: Host) -> &'static str {
-    println!("{:?}", host);
-    println!("{:?}", client_map);
-    "🚀Safesixx is het gaafst!!!🚀\n"
+    "This sentence is false.\n"
 }
 
 fn resolve_uuid_from_host(host: &str) -> Option<Uuid> {
@@ -85,19 +83,18 @@ async fn main() {
         .build();
     let https_client: HttpsClient = hyper::Client::builder().build(https);
 
-    let forwarder_router = Router::new().route("/*path", any(forwarder));
-    let default_router = Router::new().route("/*path", any(handler));
+    let forwarder_router = Router::new().fallback(any(forwarder));
+    let default_router = Router::new().fallback(any(handler));
 
     let app = Router::new()
-        .route(
-            "/*path",
-            any(|Host(hostname): Host, request: Request<Body>| async move {
+        .fallback(any(
+            |Host(hostname): Host, request: Request<Body>| async move {
                 match resolve_uuid_from_host(hostname.as_str()) {
                     Some(_) => forwarder_router.oneshot(request).await,
                     None => default_router.oneshot(request).await,
                 }
-            }),
-        )
+            },
+        ))
         .layer(Extension(client_map))
         .layer(Extension(http_client));
 
@@ -128,7 +125,7 @@ async fn main() {
         tokio::select!(
             _ = http_serve => {},
             _ = sg_server => {},
-            _ = jwt_key_store::refresh_loop(key_store, https_client) => {},
+            _ = jwt_key_store::refresh_loop(&config.auth.jwt_key_endpoints, key_store, https_client) => {},
         );
     } else {
         let http_serve =
@@ -136,7 +133,7 @@ async fn main() {
         tokio::select!(
             _ = http_serve => {},
             _ = sg_server => {},
-            _ = jwt_key_store::refresh_loop(key_store, https_client) => {},
+            _ = jwt_key_store::refresh_loop(&config.auth.jwt_key_endpoints, key_store, https_client) => {},
         );
     };
 }

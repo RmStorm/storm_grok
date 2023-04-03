@@ -28,6 +28,8 @@ pub struct Server {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AuthRules {
+    pub jwt_key_endpoints: Vec<String>,
+    pub default_allow_issuers: Vec<String>,
     pub enabled: bool,
     pub users: Vec<String>,
     pub host_domains: Vec<String>,

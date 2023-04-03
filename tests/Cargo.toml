@@ -6,7 +6,7 @@ publish = false
 
 [dev-dependencies]
 regex = "1"
-color-eyre = "0.5"
+color-eyre = "0.6"
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "0.14", features = ["full"] }
 hyper-timeout = "0.4"
