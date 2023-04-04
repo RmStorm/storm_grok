@@ -4,17 +4,11 @@ use std::{env, io::ErrorKind, net::SocketAddr, sync::Arc};
 use tracing::log::{debug, error, info, warn};
 use uuid::Uuid;
 
-use parking_lot::RwLock;
-
 use tokio::net::TcpStream;
 
 use quinn::{Connection, Endpoint, RecvStream, SendStream};
 
-use crate::{
-    dev_stuff,
-    eaves_socket::{EavesSocket, LoggedConnection, TrafficLog},
-    Cli, Mode,
-};
+use crate::{dev_stuff, Cli, Mode};
 
 fn setup_quic_on_available_port(host: &str) -> Endpoint {
     for port in 6001..65535 {
@@ -94,7 +88,7 @@ async fn sgrok_handshake(conn: quinn::Connection, mode: Mode) -> Vec<u8> {
         .expect("The server did not give us a UUID!")
 }
 
-pub async fn start_client(forward_port: u16, cli: Cli, traffic_log: Arc<RwLock<TrafficLog>>) {
+pub async fn start_client(exposed_port: u16, cli: Cli) {
     let mut endpoint = if cli.dev {
         setup_quic_on_available_port("127.0.0.1")
     } else {
@@ -129,7 +123,7 @@ pub async fn start_client(forward_port: u16, cli: Cli, traffic_log: Arc<RwLock<T
     // TODO: Signals are not handled properly so this thing just dies leaving the server to timeout
     tokio::select!(
         _ = handle_uni_conns_loop(connection.clone()) => {},
-        _ = handle_bi_conns_loop(connection, forward_port, traffic_log) => {},
+        _ = handle_bi_conns_loop(connection, exposed_port) => {},
     );
     endpoint.wait_idle().await;
 }
@@ -147,50 +141,28 @@ async fn handle_uni_conns_loop(connection: Connection) {
     error!("could net receive ping from server, something is wrong with the connection")
 }
 
-async fn handle_bi_conns_loop(
-    connection: Connection,
-    port: u16,
-    traffic_log: Arc<RwLock<TrafficLog>>,
-) {
+async fn handle_bi_conns_loop(connection: Connection, exposed_port: u16) {
     while let Ok(streams) = connection.accept_bi().await {
-        let traffic_log = traffic_log.clone();
         // Should I keep track of these spawned childtasks?
-        tokio::spawn(async move { handle_client_conn(streams, port, traffic_log).await });
+        tokio::spawn(async move { handle_client_conn(streams, exposed_port).await });
     }
     error!("error accepting bidirectional stream, something is wrong with the connection");
 }
 
-async fn handle_client_conn(
-    streams: (SendStream, RecvStream),
-    port: u16,
-    traffic_log: Arc<RwLock<TrafficLog>>,
-) {
-    let (mut client_send, client_recv) = streams;
-    match TcpStream::connect(("127.0.0.1", port)).await {
-        Ok(mut server_stream) => {
+async fn handle_client_conn(streams: (SendStream, RecvStream), exposed_port: u16) {
+    let (mut client_send, mut client_recv) = streams;
+    match TcpStream::connect(("127.0.0.1", exposed_port)).await {
+        Ok(server_stream) => {
             info!("Succesfully connected client");
-            let lc = LoggedConnection {
-                traffic_in: vec![],
-                traffic_out: vec![],
-            };
-            let conn_index = traffic_log.read().logged_conns.len();
-            traffic_log.write().logged_conns.push(lc);
-
-            let mut es = EavesSocket {
-                reader: Box::pin(client_recv),
-                writer: Box::pin(client_send),
-                traffic_log: traffic_log.clone(),
-                conn_index,
-            };
-            match tokio::io::copy_bidirectional(&mut es, &mut server_stream).await {
-                Ok(res) => info!("success {:?}", res),
-                Err(e) => info!("failure {:?}", e),
-            }
-            info!("Disconnected client!");
-            info!("Full traffic log: {:?}", traffic_log.read());
+            let (mut read_half, mut write_half) = server_stream.into_split();
+            let yada = tokio::join!(
+                tokio::io::copy(&mut client_recv, &mut write_half),
+                tokio::io::copy(&mut read_half, &mut client_send),
+            );
+            info!("Disconnected client! {:?}", yada);
         }
         Err(e) => {
-            error!("Encountered {:?} while connecting to {:?}", e, port);
+            error!("Encountered {:?} while connecting to {:?}", e, exposed_port);
             client_send.finish().await.unwrap();
         }
     }
