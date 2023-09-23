@@ -1,3 +1,4 @@
+use eaves_proxy::TrafficLog;
 use include_dir::{include_dir, Dir};
 
 use std::{collections::HashMap, io::ErrorKind, net::TcpListener, sync::Arc};
@@ -20,7 +21,6 @@ static DS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../dist");
 mod client;
 mod dev_stuff;
 mod eaves_proxy;
-mod eaves_socket;
 
 use clap::{Parser, ValueEnum};
 
@@ -55,8 +55,8 @@ impl From<Mode> for [u8; 1] {
 }
 
 async fn get_traffic_log(
-    Extension(traffic_log): Extension<Arc<RwLock<eaves_socket::TrafficLog>>>,
-) -> Json<eaves_socket::TrafficLog> {
+    Extension(traffic_log): Extension<Arc<RwLock<TrafficLog>>>,
+) -> Json<TrafficLog> {
     Json(traffic_log.read().clone())
 }
 
@@ -132,11 +132,9 @@ async fn main() {
         .with(console_layer)
         .init();
 
-    let traffic_log: Arc<RwLock<eaves_socket::TrafficLog>> =
-        Arc::new(RwLock::new(eaves_socket::TrafficLog {
-            requests: Vec::new(),
-            logged_conns: Vec::new(),
-        }));
+    let traffic_log: Arc<RwLock<TrafficLog>> = Arc::new(RwLock::new(TrafficLog {
+        requests: Vec::new(),
+    }));
     let http_client: HttpClient = hyper::Client::new();
     let app = Router::new()
         .route("/api/hello", get(hello))
@@ -159,14 +157,14 @@ async fn main() {
     if mode == Mode::Http {
         let (http_proxy, proxy_port) =
             eaves_proxy::set_up_eaves_proxy(exposed_port, http_client, traffic_log.clone());
-        let sg_client = client::start_client(proxy_port, cli, traffic_log);
+        let sg_client = client::start_client(proxy_port, cli);
         tokio::select!(
             res = http_proxy => {info!("http_proxy completed first with {:?}", res)},
             res = http_serve => {info!("http_serve completed first with {:?}", res)},
             _ = sg_client => {info!("sg_client completed first")},
         )
     } else {
-        let sg_client = client::start_client(exposed_port, cli, traffic_log);
+        let sg_client = client::start_client(exposed_port, cli);
         tokio::select!(
             res = http_serve => {info!("http_serve completed first with {:?}", res)},
             _ = sg_client => {info!("sg_client completed first")},
