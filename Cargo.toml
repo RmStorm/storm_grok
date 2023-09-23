@@ -1,5 +1,6 @@
 [workspace]
 members = ["server", "client", "frontend", "tests"]
+resolver = "2"
 
 # release profile tips from: https://github.com/johnthagen/min-sized-rust
 # and: https://fasterthanli.me/articles/why-is-my-rust-build-so-slow
@@ -9,3 +10,6 @@ strip = true
 lto = true
 panic = "abort"
 opt-level = "s"
+
+[build.target.wasm32-unknown-unknown]
+rustflags = ["linker=clang-12","link-args=-fuse-ld=/home/rmstorm/.local/bin/mold"]

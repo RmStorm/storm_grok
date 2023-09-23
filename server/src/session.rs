@@ -108,14 +108,14 @@ pub async fn start_session(
     auth: settings::AuthRules,
 ) {
     info!("Establishing incoming connection");
-    let mut conn: Connection = match conn.await {
+    let conn: Connection = match conn.await {
         Ok(conn) => conn,
         Err(e) => {
             error!("Encountered error while starting quicc conn {e:?}");
             return;
         }
     };
-    let listener = match connect_client(&mut conn, key_map, client_map, &auth).await {
+    let listener = match connect_client(conn.clone(), key_map, client_map, &auth).await {
         Ok(res) => res,
         Err(e) => {
             error!("Encountered '{:#}' while handshaking client", e);
@@ -140,12 +140,12 @@ pub async fn start_session(
 /// the client and after that the client should start listening for bidirectional
 /// connections.
 async fn connect_client(
-    conn: &mut Connection,
+    conn: Connection,
     key_map: KeyMap,
     client_map: ClientMap,
     auth: &settings::AuthRules,
 ) -> Result<RegisteredListener> {
-    let (mut send, recv) = conn.accept_bi().await?;
+    let (mut send, mut recv) = conn.accept_bi().await?;
     // Since JWT's have to fit in a header 8kb is the practical upper limit on token size
     let received_bytes = recv.read_to_end(8192).await?;
     let requested_mode = Mode::from(received_bytes[0]);

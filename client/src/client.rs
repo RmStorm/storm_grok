@@ -50,7 +50,7 @@ async fn start_quic_conn(endpoint: &mut Endpoint, dev_mode: bool) -> Result<quin
         Ok(endpoint.connect(socket_addr.parse::<SocketAddr>()?, "localhost")?)
     } else {
         let mut root_store = rustls::RootCertStore::empty();
-        root_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+        root_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
             rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
                 ta.subject,
                 ta.spki,
@@ -75,8 +75,8 @@ async fn start_quic_conn(endpoint: &mut Endpoint, dev_mode: bool) -> Result<quin
     }
 }
 
-async fn connect_client(conn: Connection, mode: Mode) -> Vec<u8> {
-    let (mut send, recv) = conn.open_bi().await.unwrap();
+async fn sgrok_handshake(conn: quinn::Connection, mode: Mode) -> Vec<u8> {
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
 
     let token: String = match env::var("SGROK_TOKEN") {
         Ok(token) => token,
@@ -105,7 +105,7 @@ pub async fn start_client(forward_port: u16, cli: Cli, traffic_log: Arc<RwLock<T
         .unwrap()
         .await
         .unwrap();
-    let response_bytes = connect_client(connection.clone(), cli.mode).await;
+    let response_bytes = sgrok_handshake(connection.clone(), cli.mode).await;
 
     info!("Exposing localhost:{:?} on the internet!", cli.port);
     match cli.mode {
@@ -135,7 +135,7 @@ pub async fn start_client(forward_port: u16, cli: Cli, traffic_log: Arc<RwLock<T
 }
 
 async fn handle_uni_conns_loop(connection: Connection) {
-    while let Ok(stream) = connection.accept_uni().await {
+    while let Ok(mut stream) = connection.accept_uni().await {
         let buffered_data = stream.read_to_end(100).await.unwrap();
         if buffered_data != b"ping".to_vec() {
             info!(

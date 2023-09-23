@@ -16,8 +16,8 @@ use hyper::client::HttpConnector;
 use parking_lot::RwLock;
 use tokio_util::io::ReaderStream;
 use tracing::info;
-use tracing_subscriber::{filter::LevelFilter, fmt, EnvFilter};
-
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{filter::LevelFilter, fmt, layer::SubscriberExt, EnvFilter};
 static DS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../dist");
 
 mod client;
@@ -28,6 +28,12 @@ use clap::Parser;
 use clap::ValueEnum;
 
 type HttpClient = hyper::client::Client<HttpConnector, Body>;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum Mode {
+    Http,
+    Tcp,
+}
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -40,12 +46,6 @@ pub struct Cli {
     port: u16,
     #[clap(long, short, action)]
     dev: bool,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-enum Mode {
-    Http,
-    Tcp,
 }
 
 impl From<Mode> for [u8; 1] {
@@ -195,13 +195,16 @@ async fn main() {
     let cli = Cli::parse();
     let exposed_port = cli.port;
     let mode = cli.mode;
-    fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::DEBUG.into())
-                .from_env_lossy(),
-        )
-        .event_format(fmt::format().pretty())
+
+    let console_layer = console_subscriber::spawn();
+    let fmt_layer = fmt::layer().event_format(fmt::format().compact());
+    let filter_layer = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+
+    tracing_subscriber::registry()
+        .with(fmt_layer.with_filter(filter_layer))
+        .with(console_layer)
         .init();
 
     let traffic_log: Arc<RwLock<eaves_socket::TrafficLog>> =

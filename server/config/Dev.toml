@@ -4,8 +4,8 @@ http_host = "[::1]"
 quic_host = "127.0.0.1"
 
 [log]
-level = "debug"
+level = "info"
 format = "compact"
 
 [auth]
-enabled = true
+enabled = false
