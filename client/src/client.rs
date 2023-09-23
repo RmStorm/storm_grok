@@ -131,6 +131,7 @@ pub async fn start_client(forward_port: u16, cli: Cli, traffic_log: Arc<RwLock<T
         _ = handle_uni_conns_loop(connection.clone()) => {},
         _ = handle_bi_conns_loop(connection, forward_port, traffic_log) => {},
     );
+
     endpoint.wait_idle().await;
 }
 

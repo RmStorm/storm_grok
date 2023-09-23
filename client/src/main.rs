@@ -1,5 +1,3 @@
-use crate::eaves_socket::{SerializableRequest, SerializableResponse};
-use chrono::Utc;
 use include_dir::{include_dir, Dir};
 
 use std::{collections::HashMap, io::ErrorKind, net::TcpListener, sync::Arc};
@@ -7,9 +5,8 @@ use std::{collections::HashMap, io::ErrorKind, net::TcpListener, sync::Arc};
 use axum::{
     body::{Body, StreamBody},
     http::header,
-    http::{uri::Uri, Request, Response},
     response::IntoResponse,
-    routing::{any, get},
+    routing::get,
     Extension, Json, Router,
 };
 use hyper::client::HttpConnector;
@@ -22,10 +19,10 @@ static DS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../dist");
 
 mod client;
 mod dev_stuff;
+mod eaves_proxy;
 mod eaves_socket;
 
-use clap::Parser;
-use clap::ValueEnum;
+use clap::{Parser, ValueEnum};
 
 type HttpClient = hyper::client::Client<HttpConnector, Body>;
 
@@ -106,78 +103,6 @@ async fn hello() -> &'static str {
     "Some response eeeyyy\n"
 }
 
-async fn proxy(
-    Extension(client): Extension<HttpClient>,
-    Extension(port): Extension<u16>,
-    Extension(traffic_log): Extension<Arc<RwLock<eaves_socket::TrafficLog>>>,
-    mut req: Request<Body>,
-) -> Response<Body> {
-    let timestamp_in = Utc::now();
-    let path = req.uri().path();
-    let path_query = req
-        .uri()
-        .path_and_query()
-        .map(|v| v.as_str())
-        .unwrap_or(path);
-
-    let uri = format!("http://127.0.0.1:{}{}", port, path_query);
-
-    *req.uri_mut() = Uri::try_from(uri.clone()).unwrap();
-    let (in_head, in_body) = req.into_parts();
-    let sreq = SerializableRequest {
-        method: in_head.method.as_str().to_string(),
-        uri,
-        headers: in_head
-            .headers
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.as_str().to_owned(),
-                    String::from_utf8_lossy(v.as_bytes()).to_string(),
-                )
-            })
-            .collect::<Vec<_>>(),
-    };
-    let in_body_bytes = hyper::body::to_bytes(in_body).await.unwrap();
-    let body_in = in_body_bytes.clone().into();
-    let request = Request::from_parts(in_head, in_body_bytes.into());
-    let response = client.request(request).await.unwrap();
-
-    let (mut out_head, out_body) = response.into_parts();
-    let sresp = SerializableResponse {
-        status: out_head.status.as_u16(),
-        headers: out_head
-            .headers
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.as_str().to_owned(),
-                    String::from_utf8_lossy(v.as_bytes()).to_string(),
-                )
-            })
-            .collect::<Vec<_>>(),
-    };
-    let out_body_bytes = hyper::body::to_bytes(out_body).await.unwrap();
-    let body_out = out_body_bytes.clone().into();
-    out_head.headers.remove(hyper::http::header::CONTENT_LENGTH);
-    out_head
-        .headers
-        .remove(hyper::http::header::TRANSFER_ENCODING);
-    let response = Response::from_parts(out_head, out_body_bytes.into());
-    traffic_log
-        .write()
-        .requests
-        .push(eaves_socket::RequestCycle {
-            timestamp_in,
-            head_in: sreq,
-            body_in,
-            timestamp_out: Utc::now(),
-            head_out: sresp,
-            body_out,
-        });
-    response
-}
-
 #[tokio::main]
 async fn main() {
     let js_file = DS.find("*js").unwrap().next().unwrap().as_file().unwrap();
@@ -232,32 +157,19 @@ async fn main() {
         .expect("Could not start server from TcpListener")
         .serve(app.into_make_service());
     if mode == Mode::Http {
-        let proxy_addr = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let sg_client = client::start_client(
-            proxy_addr.local_addr().unwrap().port(),
-            cli,
-            traffic_log.clone(),
-        );
-
-        info!("Starting proxy at {:?}", &proxy_addr);
-        let proxy_app = Router::new()
-            .fallback(any(proxy))
-            .layer(Extension(exposed_port))
-            .layer(Extension(http_client))
-            .layer(Extension(traffic_log));
-        let http_proxy = axum::Server::from_tcp(proxy_addr)
-            .unwrap()
-            .serve(proxy_app.into_make_service());
+        let (http_proxy, proxy_port) =
+            eaves_proxy::set_up_eaves_proxy(exposed_port, http_client, traffic_log.clone());
+        let sg_client = client::start_client(proxy_port, cli, traffic_log);
         tokio::select!(
-            _ = http_proxy => {},
-            _ = http_serve => {},
-            _ = sg_client => {},
+            res = http_proxy => {info!("http_proxy completed first with {:?}", res)},
+            res = http_serve => {info!("http_serve completed first with {:?}", res)},
+            _ = sg_client => {info!("sg_client completed first")},
         )
     } else {
         let sg_client = client::start_client(exposed_port, cli, traffic_log);
         tokio::select!(
-            _ = http_serve => {},
-            _ = sg_client => {},
+            res = http_serve => {info!("http_serve completed first with {:?}", res)},
+            _ = sg_client => {info!("sg_client completed first")},
         )
     }
 }
