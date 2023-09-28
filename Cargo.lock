@@ -594,9 +594,14 @@ dependencies = [
 name = "frontend"
 version = "0.1.0"
 dependencies = [
+ "base64 0.21.4",
  "console_error_panic_hook",
  "console_log",
  "log",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_derive",
+ "shared_types",
  "sycamore",
  "web-sys",
 ]
@@ -1710,6 +1715,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30c9933e5689bd420dc6c87b7a1835701810cbc10cd86a26e4da45b73e6b1d78"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "serde_derive"
 version = "1.0.188"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1803,6 +1819,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shared_types"
+version = "0.1.0"
+dependencies = [
+ "base64 0.21.4",
+ "base64-serde",
+ "chrono",
+ "serde",
+]
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1892,6 +1918,7 @@ dependencies = [
  "quinn",
  "rustls",
  "serde",
+ "shared_types",
  "tokio",
  "tokio-util",
  "tower",

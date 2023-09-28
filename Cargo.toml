@@ -1,5 +1,5 @@
 [workspace]
-members = ["server", "client", "frontend", "tests"]
+members = ["server", "client", "frontend", "tests", "shared_types"]
 resolver = "2"
 
 # release profile tips from: https://github.com/johnthagen/min-sized-rust

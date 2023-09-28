@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+shared_types = { path = "../shared_types" }
 axum = "*"
 tokio = { version = "*", features = ["full"] }
 hyper = { version = "*", features = ["full"] }

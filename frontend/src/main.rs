@@ -1,4 +1,5 @@
-use log::info;
+use serde_wasm_bindgen::from_value;
+use shared_types::{RequestCycle, TrafficLog};
 use sycamore::{
     futures::JsFuture,
     prelude::*,
@@ -7,34 +8,66 @@ use sycamore::{
 };
 use web_sys::{window, Response};
 
-async fn fetch_data() -> Result<JsValue, JsValue> {
+async fn fetch_data() -> Result<TrafficLog, JsValue> {
     let window = window().expect("no global `window` exists");
 
-    let response_promise = window.fetch_with_str("/api/traffic_log");
-    let response = JsFuture::from(response_promise).await?;
-    let response: Response = response.dyn_into().expect("Failed to convert to Response");
+    let response: Response = JsFuture::from(window.fetch_with_str("/api/traffic_log"))
+        .await?
+        .dyn_into()
+        .expect("Failed to convert to Response");
 
     if !response.ok() {
         return Err(JsValue::from_str("Fetch failed!"));
     }
 
-    let json_promise = response.json()?;
-    let json = JsFuture::from(json_promise).await?;
-    Ok(json)
+    let json = JsFuture::from(response.json()?).await?;
+    let deserialized_data: TrafficLog = from_value(json)?;
+    Ok(deserialized_data)
+}
+
+fn request_card_view<G: Html>(cx: Scope<'_>, request: RequestCycle) -> View<G> {
+    let visible = create_signal(cx, false);
+
+    view! {cx,
+        div(class="card") {
+            header(class="card-header") {
+                p(class="card-header-title") {
+                    (request.timestamp_in.to_string())
+                }
+                a(class="card-header-icon", role="button", on:click=move |_| {
+                    visible.set(!*visible.get());
+                }) {
+                    span(class="icon") {
+                        i(class="fas fa-angle-down", aria-hidden="true") {}
+                    }
+                }
+            }
+            div(class=format!("card-content {}", if *visible.get() { "" } else { "is-hidden" })) {
+                div(class="content") {
+                    p() { (request.request_head.method) }
+                    p() { (request.request_head.uri) }
+                    pre() { (base64::encode(&request.response_body)) }
+                }
+            }
+        }
+    }
 }
 
 #[component]
 async fn DataDisplayer<G: Html>(cx: Scope<'_>) -> View<G> {
     let data = match fetch_data().await {
-        Ok(d) => {
-            info!("{:?}", d);
-            d.as_string().unwrap_or_default()
-        }
-        Err(_) => String::from("Error fetching data"),
+        Ok(d) => d,
+        Err(_) => return view! { cx, "Error fetching data" },
     };
 
     view! { cx,
-        div(class="container") { (data) }
+        div(class="container") {
+            Keyed(
+                iterable=create_signal(cx, data.requests),
+                view=|cx, request| request_card_view(cx, request),
+                key=|request| request.timestamp_in.timestamp() // Assuming timestamp_in is unique for each request
+            )
+        }
     }
 }
 

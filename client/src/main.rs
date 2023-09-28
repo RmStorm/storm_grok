@@ -1,5 +1,5 @@
-use eaves_proxy::TrafficLog;
 use include_dir::{include_dir, Dir};
+use shared_types::TrafficLog;
 
 use std::{collections::HashMap, io::ErrorKind, net::TcpListener, sync::Arc};
 
@@ -20,7 +20,7 @@ static DS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../dist");
 
 mod client;
 mod dev_stuff;
-mod eaves_proxy;
+pub mod eaves_proxy;
 
 use clap::{Parser, ValueEnum};
 

@@ -12,46 +12,10 @@ use clap::ValueEnum;
 use hyper::{client::HttpConnector, server::conn::AddrIncoming};
 use parking_lot::RwLock;
 
-use chrono::prelude::*;
-use chrono::serde::ts_milliseconds;
-use serde::Serialize;
 use tracing::info;
 
-use base64_serde::base64_serde_type;
+use shared_types::{RequestCycle, RequestHead, ResponseHead, TrafficLog};
 
-base64_serde_type!(Base64Standard, base64::engine::general_purpose::STANDARD);
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TrafficLog {
-    pub requests: Vec<RequestCycle>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RequestHead {
-    pub method: String,
-    pub uri: String,
-    pub headers: Vec<(String, String)>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ResponseHead {
-    pub status: u16,
-    pub headers: Vec<(String, String)>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RequestCycle {
-    #[serde(with = "ts_milliseconds")]
-    pub timestamp_in: DateTime<Utc>,
-    pub request_head: RequestHead,
-    #[serde(with = "Base64Standard")]
-    pub request_body: Vec<u8>,
-    #[serde(with = "ts_milliseconds")]
-    pub timestamp_out: DateTime<Utc>,
-    pub response_head: ResponseHead,
-    #[serde(with = "Base64Standard")]
-    pub response_body: Vec<u8>,
-}
 type HttpClient = hyper::client::Client<HttpConnector, Body>;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
