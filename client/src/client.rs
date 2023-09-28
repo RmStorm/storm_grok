@@ -120,10 +120,13 @@ pub async fn start_client(forward_port: u16, cli: Cli) {
             }
         }
     }
-    // TODO: Signals are not handled properly so this thing just dies leaving the server to timeout
+    // let mut sigint = signal(SignalKind::interrupt()).expect("Failed to register SIGINT handler");
+    // let mut sigterm = signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
     tokio::select!(
         _ = handle_uni_conns_loop(connection.clone()) => {},
         _ = handle_bi_conns_loop(connection, forward_port) => {},
+        // _ = sigint.recv() => {info!("Received SIGINT, shutting down...")},
+        // _ = sigterm.recv() => {info!("Received SIGTERM, shutting down...")},
     );
 
     endpoint.wait_idle().await;

@@ -10,6 +10,3 @@ strip = true
 lto = true
 panic = "abort"
 opt-level = "s"
-
-[build.target.wasm32-unknown-unknown]
-rustflags = ["linker=clang-12","link-args=-fuse-ld=/home/rmstorm/.local/bin/mold"]

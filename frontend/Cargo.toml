@@ -7,4 +7,7 @@ edition = "2021"
 console_error_panic_hook = "*"
 console_log = { version = "*", features = ["wasm-bindgen"] }
 log = "*"
-sycamore = "*"
+sycamore = { version = "0.9.0-beta.1", features = ["suspense"] }
+# wasm-bindgen = "*"
+# wasm-bindgen-futures = "*"
+web-sys = { version = "*", features = ["Window", "Response"] }

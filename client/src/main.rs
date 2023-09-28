@@ -158,6 +158,7 @@ async fn main() {
         let (http_proxy, proxy_port) =
             eaves_proxy::set_up_eaves_proxy(exposed_port, http_client, traffic_log.clone());
         let sg_client = client::start_client(proxy_port, cli);
+
         tokio::select!(
             res = http_proxy => {info!("http_proxy completed first with {:?}", res)},
             res = http_serve => {info!("http_serve completed first with {:?}", res)},

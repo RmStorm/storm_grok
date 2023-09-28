@@ -1,4 +1,42 @@
-use sycamore::prelude::*;
+use log::info;
+use sycamore::{
+    futures::JsFuture,
+    prelude::*,
+    rt::{JsCast, JsValue},
+    suspense::Suspense,
+};
+use web_sys::{window, Response};
+
+async fn fetch_data() -> Result<JsValue, JsValue> {
+    let window = window().expect("no global `window` exists");
+
+    let response_promise = window.fetch_with_str("/api/traffic_log");
+    let response = JsFuture::from(response_promise).await?;
+    let response: Response = response.dyn_into().expect("Failed to convert to Response");
+
+    if !response.ok() {
+        return Err(JsValue::from_str("Fetch failed!"));
+    }
+
+    let json_promise = response.json()?;
+    let json = JsFuture::from(json_promise).await?;
+    Ok(json)
+}
+
+#[component]
+async fn DataDisplayer<G: Html>(cx: Scope<'_>) -> View<G> {
+    let data = match fetch_data().await {
+        Ok(d) => {
+            info!("{:?}", d);
+            d.as_string().unwrap_or_default()
+        }
+        Err(_) => String::from("Error fetching data"),
+    };
+
+    view! { cx,
+        div(class="container") { (data) }
+    }
+}
 
 #[component]
 fn App<G: Html>(cx: Scope) -> View<G> {
@@ -13,14 +51,18 @@ fn App<G: Html>(cx: Scope) -> View<G> {
     };
 
     view! { cx,
-        div {
-            h1 {
-                "Hello "
-                (displayed_name())
-                "!"
+        section(class="section"){
+            div(class="container") {
+                h1(class="title") {
+                    "Hello "
+                    (displayed_name())
+                    "!"
+                }
+                input(placeholder="What is your name??", bind:value=name)
+                Suspense(fallback=view! { cx, "Loading..." }) {
+                    DataDisplayer {}
+                }
             }
-
-            input(placeholder="What is your name??", bind:value=name)
         }
     }
 }
