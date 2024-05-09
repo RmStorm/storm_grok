@@ -36,13 +36,16 @@ pub async fn start_storm_grok_server(
     Ok(())
 }
 
+/// Start a loop accepting incoming client connections. Give every connected
+/// client session their own coroutine to run in.
+/// TODO: drop abondened coroutines handles..
 async fn handle_conns_loop(
     endpoint: Endpoint,
     client_map: ClientMap,
     key_map: KeyMap,
     auth: settings::AuthRules,
 ) {
-    // Todo: I guess this vector will grow very long now.. Need something to prune the done tasks off.
+    // TODO: I guess this vector will grow very long now.. Need something to prune the done tasks off.
     // Same situation applies to client by the way!!
     let mut handles = Vec::new();
     while let Some(conn) = endpoint.accept().await {

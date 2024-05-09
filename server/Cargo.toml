@@ -7,22 +7,22 @@ edition = "2021"
 
 [dependencies]
 hyper-reverse-proxy = { git = "https://github.com/felipenoris/hyper-reverse-proxy", rev = "e73a76600ce9e51e962de5266b03be596e6c1d50" }
-axum = "*"
-axum-server = { version = "*", features = ["tls-rustls"] }
+axum = "0.6.20"
+axum-server = { version = "0.5.1", features = ["tls-rustls"] }
 tokio = { version = "*", features = ["full"] }
-hyper = { version = "*", features = ["full"] }
+hyper = { version = "0.14.27", features = ["full"] }
 tower = "*"
 futures = "*"
-hyper-rustls = "*"
+hyper-rustls = "0.24.1"
 parking_lot = "*"
 tracing = "*"
 tracing-subscriber = { version = "*", features = ["env-filter"] }
-quinn = "*"
-rustls = { version = "*", features = ["dangerous_configuration", "quic"] }
-rustls-pemfile = "*"
+quinn = "0.10.2"
+rustls = { version = "0.21.7", features = ["dangerous_configuration", "quic"] }
+rustls-pemfile = "1.0.3"
 futures-util = "*"
 anyhow = "*"
-rcgen = "*"
+rcgen = "0.11.2"
 uuid = { version = "*", features = ["v4", "fast-rng"] }
 jsonwebtoken = "*"
 serde = {version = "*", features = ["derive"] }

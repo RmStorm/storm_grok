@@ -20,7 +20,7 @@ enum Mode {
 impl From<u8> for Mode {
     fn from(num: u8) -> Self {
         match num {
-            116 => Mode::Tcp, // 116 = t in ascii
+            b't' => Mode::Tcp,
             _ => Mode::Http,  // default to Http
         }
     }
@@ -52,6 +52,7 @@ impl Drop for RegisteredListener {
     }
 }
 
+/// Form a bridge between a tcp socket and a quic connection tx/rx <-> rx/tx
 async fn connect_tcp_to_bi_quic(listener: RegisteredListener, conn: Connection) {
     while let Ok((mut client, addr)) = listener.tcp_listener.accept().await {
         debug!("Created tcp listen port on {:?}", addr);
@@ -101,6 +102,10 @@ async fn start_local_tcp_server(mode: Mode) -> Result<TcpListener> {
     }
 }
 
+/// Accept an incoming quic connection, negotiate a 'permanent' bidirectional
+/// pipe with the connecting client. Assign them an address and tell them about
+/// it. Wire up the assigned tcp connection to their pipe and start a pinging
+/// routine to ensure the pipe remains open.
 pub async fn start_session(
     conn: Connecting,
     client_map: ClientMap,
@@ -176,9 +181,9 @@ async fn connect_client(
         }
     }
     {
-        // This snippet ensures the uuid is available. Conflicts are normally off course 'practically impossible'
-        // but since I try to assign a static uuid corresponding to the user uuid via some code paths conflicts
-        // are actually likely! In the case of a conflict no error is thrown. Just a new uuid assigned..
+        // Check if the UUID (id) exists in client_map. UUID conflicts are normally near impossible
+        // but can occur when UUIDs are manually assigned. If a conflict is found, a new UUID is
+        // generated and used instead, ensuring uniqueness. No errors are thrown for conflicts.
         let mut writable_client_map = client_map.write();
         if writable_client_map.contains_key(&id) {
             id = Uuid::new_v4();

@@ -3,15 +3,16 @@ name = "frontend"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
-shared_types = { path = "../shared_types" }
-console_error_panic_hook = "*"
-console_log = { version = "*", features = ["wasm-bindgen"] }
-log = "*"
-sycamore = { version = "0.9.0-beta.1", features = ["suspense"] }
-web-sys = { version = "*", features = ["Window", "Response"] }
-serde = "*"
-serde_derive = "*"
-serde-wasm-bindgen = "*"
-base64 = "0.21.4"
-# base64-serde = "*"
+app = { path = "../app", default-features = false, features = ["hydrate"] }
+leptos = { workspace = true, features = [ "hydrate" ] }
+
+console_error_panic_hook.workspace = true
+console_log.workspace = true
+log.workspace = true
+wasm-bindgen.workspace = true

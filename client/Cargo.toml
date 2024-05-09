@@ -1,30 +1,35 @@
 [package]
-name = "storm_grok"
+name = "client"
 version = "0.1.0"
 edition = "2021"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
+app = { path = "../app", default-features = false, features = ["ssr"] }
 shared_types = { path = "../shared_types" }
-axum = "*"
-tokio = { version = "*", features = ["full"] }
-hyper = { version = "*", features = ["full"] }
-parking_lot = "*"
-tracing = "*"
-tracing-subscriber = { version = "*", features = ["env-filter"] }
-quinn = "*"
-rustls = { version = "*", features = ["dangerous_configuration", "quic"] }
-futures = "*"
-futures-util = "*"
-color-eyre = "*"
-uuid = { version = "*", features = ["v4", "fast-rng"] }
-clap = { version = "*", features = ["derive"] }
-chrono = { version = "*", features = ["serde"] }
-tokio-util = { version = "*", features = ["io"] }
-include_dir = { version = "*", features = ["glob"] }
-tower = "*"
-tower-http = { version = "*", features = ["fs"] }
-serde = { version = "*", features = ["derive"] }
-webpki-roots = "*"
-base64 = "*"
-base64-serde = "*"
-console-subscriber = "*"
+leptos = { workspace = true, features = [ "ssr" ]}
+leptos_axum.workspace = true
+
+axum.workspace = true
+simple_logger.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+log.workspace = true
+parking_lot.workspace= true
+
+clap = { version = "4.5.4", features = ["derive"] }
+rustls = { version = "0.21.12", features = ["dangerous_configuration", "quic"] }
+webpki-roots = "0.26.1"
+uuid = { version = "1.8.0", features = ["v4", "fast-rng"] }
+color-eyre = "0.6.3"
+chrono = { version = "0.4.38", features = ["serde"] }
+quinn = "0.10.2"
+
+async-trait = "0.1.80"
+pingora = "0.1.1"
+pingora-core = "0.1.1"
+pingora-http = "0.1.1"
+pingora-proxy = "0.1.1"
+bytes = "1.6.0"

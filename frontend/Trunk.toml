@@ -1,7 +1,0 @@
-[build]
-target = "index.html"
-dist = "../dist"
-
-[[proxy]]
-rewrite = "/api/"
-backend = "http://localhost:4040/api/"

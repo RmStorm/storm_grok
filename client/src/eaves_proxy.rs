@@ -1,185 +1,124 @@
+use axum::http::{HeaderName, HeaderValue};
+use bytes::Bytes;
 use chrono::Utc;
+use pingora::services::listening::Service;
+use shared_types::{RequestCycle, RequestHead, ResponseHead, TrafficLog};
+use std::sync::Arc;
 
-use std::{error::Error, net::TcpListener, sync::Arc};
-
-use axum::{
-    body::Body,
-    http::{uri::Uri, Request, Response},
-    routing::{any, IntoMakeService},
-    Extension, Router,
-};
-use clap::ValueEnum;
-use hyper::{client::HttpConnector, server::conn::AddrIncoming};
+use async_trait::async_trait;
 use parking_lot::RwLock;
 
-use tracing::info;
+use pingora_core::upstreams::peer::HttpPeer;
+use pingora_core::Result;
+use pingora_proxy::{HttpProxy, ProxyHttp, Session};
 
-use shared_types::{RequestCycle, RequestHead, ResponseHead, TrafficLog};
-
-type HttpClient = hyper::client::Client<HttpConnector, Body>;
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-enum Mode {
-    Http,
-    Tcp,
+pub struct EavesProxy {
+    traffic_log: Arc<RwLock<TrafficLog>>,
+    target_port: u16,
 }
 
-#[derive(Debug)]
-enum ProxyError {
-    UriError,
-    BodyError,
-    ConnectionRefused,
-    OtherRequestError,
+pub struct MyCtx {
+    pub timestamp_in: Option<chrono::DateTime<Utc>>,
+    pub request_head: Option<RequestHead>,
+    pub request_body: Vec<u8>,
+    pub timestamp_out: Option<chrono::DateTime<Utc>>,
+    pub response_head: Option<ResponseHead>,
+    pub response_body: Vec<u8>,
 }
 
-impl std::fmt::Display for ProxyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProxyError::UriError => write!(f, "Failed to parse URI"),
-            ProxyError::BodyError => write!(f, "Failed to read body"),
-            ProxyError::ConnectionRefused => write!(f, "Forwaded service not running"),
-            ProxyError::OtherRequestError => write!(f, "Request error"),
+fn header_mapper((name, val): (&HeaderName, &HeaderValue)) -> (String, String) {
+    (
+        name.as_str().to_owned(),
+        String::from_utf8_lossy(val.as_bytes()).to_string(),
+    )
+}
+
+#[async_trait]
+impl ProxyHttp for EavesProxy {
+    type CTX = MyCtx;
+    fn new_ctx(&self) -> Self::CTX {
+        MyCtx {
+            timestamp_in: None,
+            request_head: None,
+            request_body: vec![],
+            timestamp_out: None,
+            response_head: None,
+            response_body: vec![],
         }
     }
-}
 
-impl std::error::Error for ProxyError {}
+    async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
+        ctx.timestamp_in = Some(Utc::now());
+        if let Ok(Some(b)) = session.read_request_body().await {
+            ctx.request_body = b.into()
+        };
+        let head = session.req_header();
+        ctx.request_head = Some(RequestHead {
+            method: head.method.as_str().into(),
+            uri: head.uri.to_string(),
+            headers: head.headers.iter().map(header_mapper).collect::<Vec<_>>(),
+        });
+        Ok(false)
+    }
 
-fn error_response(err: ProxyError) -> Response<Body> {
-    let status = match err {
-        ProxyError::UriError | ProxyError::BodyError => hyper::StatusCode::BAD_REQUEST,
-        ProxyError::ConnectionRefused => hyper::StatusCode::NOT_FOUND,
-        ProxyError::OtherRequestError => hyper::StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    Response::builder()
-        .status(status)
-        .body(Body::from(err.to_string()))
-        .unwrap()
-}
+    async fn upstream_peer(&self, _: &mut Session, _ctx: &mut Self::CTX) -> Result<Box<HttpPeer>> {
+        let addr = ("127.0.0.1", self.target_port);
+        Ok(Box::new(HttpPeer::new(addr, false, "nada".to_string())))
+    }
 
-async fn proxy(
-    client: HttpClient,
-    port: u16,
-    traffic_log: Arc<RwLock<TrafficLog>>,
-    req: Request<Body>,
-) -> Result<Response<Body>, ProxyError> {
-    let timestamp_in = Utc::now();
-    let (request_head, request_body, request) = copy_request(req, port).await?;
+    async fn response_filter(
+        &self,
+        _session: &mut Session,
+        head: &mut pingora_http::ResponseHeader,
+        ctx: &mut Self::CTX,
+    ) -> Result<()> {
+        ctx.response_head = Some(ResponseHead {
+            status: head.status.into(),
+            headers: head.headers.iter().map(header_mapper).collect::<Vec<_>>(),
+        });
+        Ok(())
+    }
 
-    let response = client.request(request).await.map_err(map_hyper_error)?;
-
-    let (response_head, response_body, response) = copy_response(response).await?;
-    traffic_log.write().requests.push(RequestCycle {
-        timestamp_in,
-        request_head,
-        request_body,
-        timestamp_out: Utc::now(),
-        response_head,
-        response_body,
-    });
-    Ok(response)
-}
-
-fn map_hyper_error(err: hyper::Error) -> ProxyError {
-    if let Some(source) = err.source() {
-        if source.to_string().contains("Connection refused") {
-            return ProxyError::ConnectionRefused;
+    fn response_body_filter(
+        &self,
+        _session: &mut Session,
+        body: &mut Option<Bytes>,
+        end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<Option<std::time::Duration>>
+    where
+        Self::CTX: Send + Sync,
+    {
+        if let Some(b) = body {
+            ctx.response_body.extend(&b[..]);
         }
-    }
-    ProxyError::OtherRequestError
-}
+        if end_of_stream {
+            self.traffic_log.write().requests.push(RequestCycle {
+                timestamp_in: ctx.timestamp_in.unwrap(),
+                request_head: ctx.request_head.take().unwrap(),
+                request_body: std::mem::take(&mut ctx.request_body),
+                timestamp_out: Utc::now(),
+                response_head: ctx.response_head.take().unwrap(),
+                response_body: std::mem::take(&mut ctx.response_body),
+            });
+        }
 
-async fn copy_request(
-    mut req: Request<Body>,
-    port: u16,
-) -> Result<(RequestHead, Vec<u8>, Request<Body>), ProxyError> {
-    let path = req.uri().path();
-    let path_query = req
-        .uri()
-        .path_and_query()
-        .map(|v| v.as_str())
-        .unwrap_or(path);
-    let uri = format!("http://127.0.0.1:{}{}", port, path_query);
-    *req.uri_mut() = Uri::try_from(uri.clone()).map_err(|_| ProxyError::UriError)?;
-    let (in_head, in_body) = req.into_parts();
-    let sreq = RequestHead {
-        method: in_head.method.as_str().to_string(),
-        uri,
-        headers: in_head
-            .headers
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.as_str().to_owned(),
-                    String::from_utf8_lossy(v.as_bytes()).to_string(),
-                )
-            })
-            .collect::<Vec<_>>(),
-    };
-    let in_body_bytes = hyper::body::to_bytes(in_body)
-        .await
-        .map_err(|_| ProxyError::BodyError)?;
-    let body_in = in_body_bytes.clone().into();
-    let request = Request::from_parts(in_head, in_body_bytes.into());
-    Ok((sreq, body_in, request))
-}
-async fn copy_response(
-    response: Response<Body>,
-) -> Result<(ResponseHead, Vec<u8>, Response<Body>), ProxyError> {
-    let (mut out_head, out_body) = response.into_parts();
-    let sresp = ResponseHead {
-        status: out_head.status.as_u16(),
-        headers: out_head
-            .headers
-            .iter()
-            .map(|(k, v)| {
-                (
-                    k.as_str().to_owned(),
-                    String::from_utf8_lossy(v.as_bytes()).to_string(),
-                )
-            })
-            .collect::<Vec<_>>(),
-    };
-    let out_body_bytes = hyper::body::to_bytes(out_body)
-        .await
-        .map_err(|_| ProxyError::BodyError)?;
-    let body_out = out_body_bytes.clone().into();
-    out_head.headers.remove(hyper::http::header::CONTENT_LENGTH);
-    out_head
-        .headers
-        .remove(hyper::http::header::TRANSFER_ENCODING);
-    let response = Response::from_parts(out_head, out_body_bytes.into());
-    Ok((sresp, body_out, response))
-}
-
-async fn proxy_request(
-    Extension(client): Extension<HttpClient>,
-    Extension(port): Extension<u16>,
-    Extension(traffic_log): Extension<Arc<RwLock<TrafficLog>>>,
-    req: Request<Body>,
-) -> Response<Body> {
-    match proxy(client, port, traffic_log, req).await {
-        Ok(response) => response,
-        Err(err) => error_response(err),
+        Ok(None)
     }
 }
 
-pub fn set_up_eaves_proxy(
-    exposed_port: u16,
-    http_client: hyper::Client<HttpConnector>,
+pub fn configure_eaves_proxy(
+    conf: &Arc<pingora::server::configuration::ServerConf>,
+    target_port: u16,
     traffic_log: Arc<RwLock<TrafficLog>>,
-) -> (axum::Server<AddrIncoming, IntoMakeService<Router>>, u16) {
-    let proxy_addr = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let proxy_port = proxy_addr.local_addr().unwrap().port();
-
-    info!("Starting proxy at {:?}", &proxy_addr);
-    let http_proxy = axum::Server::from_tcp(proxy_addr).unwrap().serve(
-        Router::new()
-            .fallback(any(proxy_request))
-            .layer(Extension(exposed_port))
-            .layer(Extension(http_client))
-            .layer(Extension(traffic_log))
-            .into_make_service(),
+) -> (Service<HttpProxy<EavesProxy>>, u16) {
+    let mut my_proxy = pingora_proxy::http_proxy_service(
+        conf,
+        EavesProxy {
+            traffic_log,
+            target_port,
+        },
     );
-    (http_proxy, proxy_port)
+    my_proxy.add_tcp("127.0.0.1:6190");
+    (my_proxy, 6190)
 }
